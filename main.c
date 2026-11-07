@@ -166,7 +166,7 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 	if(camera_controls){
 		if(lyn > 0){
 			override_camera = 1;
-			camera_override = (float)(lyn * -1.5f) / 127.0f;
+			camera_override = (float)(lyn * -3.0f) / 127.0f;
 		}
 
 		if(lyp > 0){
