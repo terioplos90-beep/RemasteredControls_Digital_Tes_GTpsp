@@ -17,6 +17,13 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+/*
+  MODIFIKASI: ditambah fitur MUNDUR (reverse) analog.
+  - Input: stick kanan ke KANAN (rxp), di PPSSPP maupun PSVita.
+  - Ditulis ke field reverse di struct kontrol (offset 0xc) + flag 0x08.
+  Bagian yang diubah ditandai komentar "REVERSE".
+*/
+
 #include <pspctrl.h>
 
 #include <string.h>
@@ -29,6 +36,10 @@
 #include <systemctrl.h>
 
 #include "common.h"
+
+#include <pspnet.h>          // UDP
+#include <pspnet_inet.h>     // UDP
+
 #define GAME_MODULE_NAME "PDIAPP"
 
 PSP_MODULE_INFO(MODULE_NAME, PSP_MODULE_KERNEL, 1, 0);
@@ -46,6 +57,19 @@ static int override_accel = 0;
 static int accel_override = 0;
 static int override_brake = 0;
 static int brake_override = 0;
+static int override_reverse = 0;      // REVERSE
+static int reverse_override = 0;      // REVERSE
+static int override_handbrake = 0;    // HANDBRAKE (khusus PPSSPP)
+static int handbrake_override = 0;    // HANDBRAKE
+// UDP: diisi oleh thread penerima, dibaca oleh sample_input
+#define NET_PORT 5557
+#define NET_STEER_SIGN 1      // ubah ke -1 kalau setir terbalik
+static volatile int net_accel = 0;
+static volatile int net_brake = 0;
+static volatile int net_reverse = 0;
+static volatile int net_handbrake = 0;
+static volatile int net_steer = 0;   // -127..127
+
 static int override_steering = 0;
 static short int steering_override = 0;
 static int override_camera = 0;
@@ -82,6 +106,7 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 	int ry = pad_data[count - 1].Rsrv[1];
 	int lx = pad_data[count - 1].Lx;
 	int ly = pad_data[count - 1].Ly;
+	unsigned int buttons = pad_data[count - 1].Buttons;   // DIGITAL
 
 	#if VERBOSE
 	u32 timestamp = pad_data[count - 1].TimeStamp;
@@ -93,7 +118,7 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 	int lxn = 0;
 	int lyp = 0;
 	int lyn = 0;
-	//int rxp = 0;
+	int rxp = 0;                      // REVERSE (sebelumnya di-comment)
 	int rxn = 0;
 	int ryp = 0;
 	int ryn = 0;
@@ -118,11 +143,9 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 	if(rx < 128){
 		rxn = apply_deadzone(128 - rx);
 	}
-	/*
-	if(rx > 128){
+	if(rx > 128){                     // REVERSE (sebelumnya di-comment)
 		rxp = apply_deadzone(rx - 128);
 	}
-	*/
 	if(ry < 128){
 		ryn = apply_deadzone(128 - ry);
 	}
@@ -130,6 +153,7 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 		ryp = apply_deadzone(ry - 128);
 	}
 
+	// catatan: rxp sengaja tidak ikut ditukar, jadi "kanan" tetap kanan
 	if(adjacent_axes){
 		int tmp = ryn;
 		ryn = rxn;
@@ -138,6 +162,8 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 
 	override_brake = 0;
 	override_accel = 0;
+	override_reverse = 0;             // REVERSE
+	override_handbrake = 0;           // HANDBRAKE
 	override_steering = 0;
 	override_camera = 0;
 
@@ -161,18 +187,84 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 			override_accel = 1;
 			accel_override = ryn;
 		}
+
+		if(rxp > 0){                  // REVERSE
+			override_reverse = 1;
+			reverse_override = rxp;
+		}
+
+		// HANDBRAKE: khusus PPSSPP. Karena sumbu ditukar (adjacent_axes),
+		// rxn di sini = stick kanan ATAS.
+		if(adjacent_axes && rxn > 0){
+			override_handbrake = 1;
+			handbrake_override = rxn;
+		}
 	}
 
 	if(camera_controls){
 		if(lyn > 0){
 			override_camera = 1;
-			camera_override = (float)(lyn * -3.0f) / 127.0f;
+			camera_override = (float)(lyn * -1.5f) / 127.0f;
 		}
 
 		if(lyp > 0){
 			override_camera = 1;
 			camera_override = (float)(lyp * 1.5f) / 127.0f;
 		}
+	}
+
+	// DIGITAL: tombol diubah jadi nilai analog penuh (127).
+	// Analog diprioritaskan; tombol hanya dipakai kalau analog tidak aktif.
+	// Pemetaan (ubah sesuai selera):
+	//   Cross -> gas, Square -> rem, Triangle -> mundur,
+	//   Circle -> handbrake, D-pad kiri/kanan -> setir
+	if(!override_accel && (buttons & PSP_CTRL_CROSS)){
+		override_accel = 1;
+		accel_override = 127;
+	}
+	if(!override_brake && (buttons & PSP_CTRL_SQUARE)){
+		override_brake = 1;
+		brake_override = 127;
+	}
+	if(!override_reverse && (buttons & PSP_CTRL_TRIANGLE)){
+		override_reverse = 1;
+		reverse_override = 127;
+	}
+	if(adjacent_axes && !override_handbrake && (buttons & PSP_CTRL_CIRCLE)){
+		override_handbrake = 1;
+		handbrake_override = 127;
+	}
+	if(!override_steering){
+		if(buttons & PSP_CTRL_LEFT){
+			override_steering = 1;
+			steering_override = 127;
+		}else if(buttons & PSP_CTRL_RIGHT){
+			override_steering = 1;
+			steering_override = -127;
+		}
+	}
+
+	// UDP: input dari aplikasi Sketchware. Dipakai kalau analog/tombol
+	// fisik untuk fungsi yang sama sedang tidak aktif.
+	if(!override_accel && net_accel){
+		override_accel = 1;
+		accel_override = 127;
+	}
+	if(!override_brake && net_brake){
+		override_brake = 1;
+		brake_override = 127;
+	}
+	if(!override_reverse && net_reverse){
+		override_reverse = 1;
+		reverse_override = 127;
+	}
+	if(adjacent_axes && !override_handbrake && net_handbrake){
+		override_handbrake = 1;
+		handbrake_override = 127;
+	}
+	if(!override_steering && net_steer != 0){
+		override_steering = 1;
+		steering_override = net_steer * NET_STEER_SIGN;
 	}
 
 	LOG_VERBOSE("timestamp: %lu lx: %d ly: %d rx: %d ry: %d", timestamp, lx, ly, rx, ry);
@@ -265,12 +357,10 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 	float *camera_rotation = (float *)(&param_3[0x2c]); // +-1.0 float
 	short *throttle = (short *)(&param_3[0x8]);
 	short *brake = (short *)(&param_3[0xA]);
-	// an analog handbrake
-	//short *handbrake = (short *)(&param_3[0xe]);
-	//param_3[0] = param_3[0] | 0x10;
 	// analog reverse, also has the weird response curve
-	//short *reverse = (short *)(&param_3[0xc]);
-	//param_3[0] = param_3[0] | 8;
+	short *reverse = (short *)(&param_3[0xc]);   // REVERSE (sebelumnya di-comment)
+	// an analog handbrake
+	short *handbrake = (short *)(&param_3[0xe]);   // HANDBRAKE (sebelumnya di-comment)
 
 	// no clutch..?
 
@@ -292,6 +382,7 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		// the mode might be per thread
 		LOG_VERBOSE("sceCtrlGetSamplingMode is not analog..? setting it to analog now");
 		sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
+		pspSdkSetK1(k1);              // FIX: kembalikan K1 sebelum return
 		return;
 	}
 
@@ -353,6 +444,21 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		param_3[0] = param_3[0] | 4;
 		*brake = brake_override * 0x1000 / 127;
 		LOG_VERBOSE("applying brake override, val is %d, brake is %d", brake_override, *brake);
+	}
+
+	// REVERSE: nilai linear dulu. Kalau responsnya aneh (seperti gas),
+	// kurvanya perlu disetel ulang setelah dites.
+	if(override_reverse){
+		param_3[0] = param_3[0] | 8;
+		*reverse = reverse_override * 0x1000 / 127;
+		LOG_VERBOSE("applying reverse override, val is %d, reverse is %d", reverse_override, *reverse);
+	}
+
+	// HANDBRAKE: nilai linear dulu, kurva belum diketahui
+	if(override_handbrake){
+		param_3[0] = param_3[0] | 0x10;
+		*handbrake = handbrake_override * 0x1000 / 127;
+		LOG_VERBOSE("applying handbrake override, val is %d, handbrake is %d", handbrake_override, *handbrake);
 	}
 
 	if(override_camera){
@@ -456,6 +562,97 @@ void parse_config(){
 	}
 }
 
+// ===== UDP RECEIVER (khusus PPSSPP) =====
+// Format paket sama dengan aplikasi Sketchware:
+//   X=1/0 gas, SQUARE=1/0 rem, R=1/0 mundur, H=1/0 handbrake, S=-127..127 setir
+static int parse_int(const char *s){
+	int neg = 0;
+	int val = 0;
+	if(*s == '-'){
+		neg = 1;
+		s++;
+	}
+	while(*s >= '0' && *s <= '9'){
+		val = val * 10 + (*s - '0');
+		s++;
+	}
+	return neg ? -val : val;
+}
+
+static void handle_packet(char *buf){
+	char *eq = buf;
+	while(*eq && *eq != '='){
+		eq++;
+	}
+	if(*eq != '='){
+		return;
+	}
+	*eq = '\0';
+	const char *key = buf;
+	int val = parse_int(eq + 1);
+
+	if(strcmp(key, "X") == 0){
+		net_accel = (val != 0);
+	}else if(strcmp(key, "SQUARE") == 0){
+		net_brake = (val != 0);
+	}else if(strcmp(key, "R") == 0){
+		net_reverse = (val != 0);
+	}else if(strcmp(key, "H") == 0){
+		net_handbrake = (val != 0);
+	}else if(strcmp(key, "S") == 0){
+		if(val > 127){
+			val = 127;
+		}
+		if(val < -127){
+			val = -127;
+		}
+		net_steer = val;
+	}
+}
+
+static int udp_thread(SceSize args, void *argp){
+	sceNetInit(0x20000, 0x2a, 0, 0x2a, 0);
+	sceNetInetInit();
+
+	int sock = sceNetInetSocket(AF_INET, SOCK_DGRAM, 0);
+	if(sock < 0){
+		LOG("udp: cannot create socket");
+		sceKernelExitDeleteThread(0);
+		return 0;
+	}
+
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_len = sizeof(addr);
+	addr.sin_family = AF_INET;
+	addr.sin_port = sceNetHtons(NET_PORT);
+	addr.sin_addr.s_addr = 0;
+
+	if(sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0){
+		LOG("udp: cannot bind port %d", NET_PORT);
+		sceNetInetClose(sock);
+		sceKernelExitDeleteThread(0);
+		return 0;
+	}
+
+	int nonblock = 1;
+	sceNetInetSetsockopt(sock, SOL_SOCKET, SO_NONBLOCK, &nonblock, sizeof(nonblock));
+
+	LOG("udp: listening on port %d", NET_PORT);
+
+	char buf[64];
+	while(1){
+		int n = sceNetInetRecv(sock, buf, sizeof(buf) - 1, 0);
+		if(n > 0){
+			buf[n] = '\0';
+			handle_packet(buf);
+		}else{
+			sceKernelDelayThread(2000);
+		}
+	}
+	return 0;
+}
+
 int init(){
 	char disc_id[50];
 	char disc_version[50];
@@ -494,6 +691,13 @@ int init(){
 		sceKernelDelayThread(1000 * 1000 * 5);
 		LOG("boosting input sampling on ppsspp");
 		sceCtrlSetSamplingCycle(5555);
+
+		SceUID udp_thid = sceKernelCreateThread("udp_rx", udp_thread, 0x18, 0x4000, 0, NULL);
+		if(udp_thid >= 0){
+			sceKernelStartThread(udp_thid, 0, NULL);
+		}else{
+			LOG("failed creating udp thread");
+		}
 	}
 
 	LOG("main thread finishes");
