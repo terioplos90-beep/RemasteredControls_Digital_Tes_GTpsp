@@ -39,7 +39,6 @@
 
 #include <pspnet.h>          // UDP
 #include <pspnet_inet.h>     // UDP
-#include <netinet/in.h>   // sockaddr_in dan htons
 
 #define GAME_MODULE_NAME "PDIAPP"
 
@@ -108,6 +107,13 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 	int lx = pad_data[count - 1].Lx;
 	int ly = pad_data[count - 1].Ly;
 	unsigned int buttons = pad_data[count - 1].Buttons;   // DIGITAL
+
+	// DEBUG: catat nilai tombol setiap kali berubah
+	static unsigned int last_buttons_logged = 0;
+	if(buttons != last_buttons_logged){
+		LOG("buttons changed: 0x%08x", buttons);
+		last_buttons_logged = buttons;
+	}
 
 	#if VERBOSE
 	u32 timestamp = pad_data[count - 1].TimeStamp;
@@ -626,7 +632,7 @@ static int udp_thread(SceSize args, void *argp){
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_len = sizeof(addr);
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(NET_PORT);
+	addr.sin_port = sceNetHtons(NET_PORT);
 	addr.sin_addr.s_addr = 0;
 
 	if(sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0){
