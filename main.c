@@ -39,6 +39,7 @@
 
 #include <pspnet.h>          // UDP
 #include <pspnet_inet.h>     // UDP
+#include <netinet/in.h>   // sockaddr_in dan htons
 
 #define GAME_MODULE_NAME "PDIAPP"
 
