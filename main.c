@@ -39,7 +39,7 @@
 
 #include <pspnet.h>          // UDP
 #include <pspnet_inet.h>     // UDP
-
+#include <netinet/in.h>
 #define GAME_MODULE_NAME "PDIAPP"
 
 PSP_MODULE_INFO(MODULE_NAME, PSP_MODULE_KERNEL, 1, 0);
@@ -632,7 +632,7 @@ static int udp_thread(SceSize args, void *argp){
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_len = sizeof(addr);
 	addr.sin_family = AF_INET;
-	addr.sin_port = sceNetHtons(NET_PORT);
+	addr.sin_port = htons(NET_PORT);
 	addr.sin_addr.s_addr = 0;
 
 	if(sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0){
