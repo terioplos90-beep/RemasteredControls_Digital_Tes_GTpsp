@@ -610,6 +610,7 @@ void parse_config(){
 	}
 }
 
+#if ENABLE_UDP
 // ===== UDP RECEIVER (khusus PPSSPP) =====
 // Format paket sama dengan aplikasi Sketchware:
 //   X=1/0 gas, SQUARE=1/0 rem, R=1/0 mundur, H=1/0 handbrake, S=-127..127 setir
@@ -720,6 +721,7 @@ static int udp_thread(SceSize args, void *argp){
 	}
 	return 0;
 }
+#endif // ENABLE_UDP
 
 int init(){
 	char disc_id[50];
