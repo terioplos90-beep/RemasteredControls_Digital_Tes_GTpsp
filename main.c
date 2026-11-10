@@ -39,7 +39,7 @@
 
 #include <pspnet.h>          // UDP
 #include <pspnet_inet.h>     // UDP
-#include <netinet/in.h>
+
 #define GAME_MODULE_NAME "PDIAPP"
 
 PSP_MODULE_INFO(MODULE_NAME, PSP_MODULE_KERNEL, 1, 0);
@@ -62,6 +62,7 @@ static int reverse_override = 0;      // REVERSE
 static int override_handbrake = 0;    // HANDBRAKE (khusus PPSSPP)
 static int handbrake_override = 0;    // HANDBRAKE
 // UDP: diisi oleh thread penerima, dibaca oleh sample_input
+#define ENABLE_UDP 0          // ubah ke 0 untuk mematikan penerima UDP di plugin
 #define NET_PORT 5557
 #define NET_STEER_SIGN 1      // ubah ke -1 kalau setir terbalik
 static volatile int net_accel = 0;
@@ -69,6 +70,7 @@ static volatile int net_brake = 0;
 static volatile int net_reverse = 0;
 static volatile int net_handbrake = 0;
 static volatile int net_steer = 0;   // -127..127
+static int dbg_x_held = 0;           // DEBUG: X (Cross) sedang ditahan
 
 static int override_steering = 0;
 static short int steering_override = 0;
@@ -251,6 +253,27 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 		}
 	}
 
+	// DEBUG: hitung berapa kali hook dipanggil selama X / D-pad kiri ditahan
+	dbg_x_held = (buttons & PSP_CTRL_CROSS) ? 1 : 0;
+	static int x_calls = 0;
+	if(buttons & PSP_CTRL_CROSS){
+		x_calls++;
+		if(x_calls == 1 || x_calls % 30 == 0){
+			LOG("X held: hook call #%d, override_accel=%d", x_calls, override_accel);
+		}
+	}else{
+		x_calls = 0;
+	}
+	static int left_calls = 0;
+	if(buttons & PSP_CTRL_LEFT){
+		left_calls++;
+		if(left_calls == 1 || left_calls % 30 == 0){
+			LOG("DPAD LEFT held: hook call #%d, override_steering=%d", left_calls, override_steering);
+		}
+	}else{
+		left_calls = 0;
+	}
+
 	// UDP: input dari aplikasi Sketchware. Dipakai kalau analog/tombol
 	// fisik untuk fungsi yang sama sedang tidak aktif.
 	if(!override_accel && net_accel){
@@ -408,6 +431,13 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		param_3[1] = param_3[1] | 2;
 		*steering = steering_override * 0x2000 / 127;
 		LOG_VERBOSE("applying steering override, val is %d, steering is %d", steering_override, *steering);
+
+		// DEBUG: catat penerapan setir secara berkala
+		static int steer_applied = 0;
+		steer_applied++;
+		if(steer_applied == 1 || steer_applied % 60 == 0){
+			LOG("steering applied #%d: override=%d, written=%d", steer_applied, steering_override, *steering);
+		}
 	}else{
 		*steering = 0;
 	}
@@ -466,6 +496,17 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		param_3[0] = param_3[0] | 0x10;
 		*handbrake = handbrake_override * 0x1000 / 127;
 		LOG_VERBOSE("applying handbrake override, val is %d, handbrake is %d", handbrake_override, *handbrake);
+	}
+
+	// DEBUG: lihat isi struct kontrol setelah plugin menulis, saat X ditahan
+	if(dbg_x_held){
+		static int x_hook_calls = 0;
+		x_hook_calls++;
+		if(x_hook_calls == 1 || x_hook_calls % 30 == 0){
+			LOG("X in hook #%d: flags=0x%02x%02x throttle=%d", x_hook_calls, param_3[0], param_3[1], *throttle);
+		}
+	}else{
+		// reset penghitung lewat pengecekan berikutnya
 	}
 
 	if(override_camera){
@@ -614,6 +655,13 @@ static void handle_packet(char *buf){
 			val = -127;
 		}
 		net_steer = val;
+
+		// DEBUG: catat paket setir secara berkala
+		static int s_packets = 0;
+		s_packets++;
+		if(s_packets == 1 || s_packets % 50 == 0){
+			LOG("udp S=%d (packet #%d)", val, s_packets);
+		}
 	}
 }
 
@@ -632,7 +680,7 @@ static int udp_thread(SceSize args, void *argp){
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_len = sizeof(addr);
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(NET_PORT);
+	addr.sin_port = sceNetHtons(NET_PORT);
 	addr.sin_addr.s_addr = 0;
 
 	if(sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0){
@@ -648,7 +696,20 @@ static int udp_thread(SceSize args, void *argp){
 	LOG("udp: listening on port %d", NET_PORT);
 
 	char buf[64];
+	unsigned int thread_last_buttons = 0;
 	while(1){
+		// DEBUG: pantau tombol langsung dari thread ini, tanpa bergantung hook
+		{
+			int k1 = pspSdkSetK1(0);
+			SceCtrlData pd;
+			int r = sceCtrlPeekBufferPositive(&pd, 1);
+			pspSdkSetK1(k1);
+			if(r > 0 && pd.Buttons != thread_last_buttons){
+				LOG("thread buttons: 0x%08x", pd.Buttons);
+				thread_last_buttons = pd.Buttons;
+			}
+		}
+
 		int n = sceNetInetRecv(sock, buf, sizeof(buf) - 1, 0);
 		if(n > 0){
 			buf[n] = '\0';
@@ -699,12 +760,16 @@ int init(){
 		LOG("boosting input sampling on ppsspp");
 		sceCtrlSetSamplingCycle(5555);
 
+		#if ENABLE_UDP
 		SceUID udp_thid = sceKernelCreateThread("udp_rx", udp_thread, 0x18, 0x4000, 0, NULL);
 		if(udp_thid >= 0){
 			sceKernelStartThread(udp_thid, 0, NULL);
 		}else{
 			LOG("failed creating udp thread");
 		}
+		#else
+		LOG("udp receiver disabled (ENABLE_UDP = 0)");
+		#endif
 	}
 
 	LOG("main thread finishes");
