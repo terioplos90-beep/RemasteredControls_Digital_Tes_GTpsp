@@ -62,7 +62,14 @@ static int reverse_override = 0;      // REVERSE
 static int override_handbrake = 0;    // HANDBRAKE (khusus PPSSPP)
 static int handbrake_override = 0;    // HANDBRAKE
 // UDP: diisi oleh thread penerima, dibaca oleh sample_input
-#define ENABLE_UDP 0          // ubah ke 0 untuk mematikan penerima UDP di plugin
+// ===== SAKLAR FITUR =====
+// 0 = mati. Kalau semua 0, perilaku sama seperti plugin asli.
+// Nyalakan satu per satu untuk mencari mana yang bermasalah.
+#define FEATURE_DIGITAL   0   // tombol digital (X, Kotak, Segitiga, Lingkaran, D-pad) jadi analog
+#define FEATURE_REVERSE   0   // mundur lewat stick kanan ke kanan
+#define FEATURE_HANDBRAKE 0   // handbrake lewat stick kanan atas (PPSSPP)
+#define FEATURE_DEBUG     0   // pencatat tambahan di GTRemastered.log
+#define ENABLE_UDP        0   // penerima UDP di plugin (butuh SDK dengan sockaddr_in)
 #define NET_PORT 5557
 #define NET_STEER_SIGN 1      // ubah ke -1 kalau setir terbalik
 static volatile int net_accel = 0;
@@ -70,7 +77,9 @@ static volatile int net_brake = 0;
 static volatile int net_reverse = 0;
 static volatile int net_handbrake = 0;
 static volatile int net_steer = 0;   // -127..127
+#if FEATURE_DEBUG
 static int dbg_x_held = 0;           // DEBUG: X (Cross) sedang ditahan
+#endif
 
 static int override_steering = 0;
 static short int steering_override = 0;
@@ -110,12 +119,14 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 	int ly = pad_data[count - 1].Ly;
 	unsigned int buttons = pad_data[count - 1].Buttons;   // DIGITAL
 
+#if FEATURE_DEBUG
 	// DEBUG: catat nilai tombol setiap kali berubah
 	static unsigned int last_buttons_logged = 0;
 	if(buttons != last_buttons_logged){
 		LOG("buttons changed: 0x%08x", buttons);
 		last_buttons_logged = buttons;
 	}
+#endif
 
 	#if VERBOSE
 	u32 timestamp = pad_data[count - 1].TimeStamp;
@@ -197,17 +208,21 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 			accel_override = ryn;
 		}
 
+#if FEATURE_REVERSE
 		if(rxp > 0){                  // REVERSE
 			override_reverse = 1;
 			reverse_override = rxp;
 		}
+#endif
 
 		// HANDBRAKE: khusus PPSSPP. Karena sumbu ditukar (adjacent_axes),
 		// rxn di sini = stick kanan ATAS.
+#if FEATURE_HANDBRAKE
 		if(adjacent_axes && rxn > 0){
 			override_handbrake = 1;
 			handbrake_override = rxn;
 		}
+#endif
 	}
 
 	if(camera_controls){
@@ -222,6 +237,7 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 		}
 	}
 
+#if FEATURE_DIGITAL
 	// DIGITAL: tombol diubah jadi nilai analog penuh (127).
 	// Analog diprioritaskan; tombol hanya dipakai kalau analog tidak aktif.
 	// Pemetaan (ubah sesuai selera):
@@ -252,7 +268,9 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 			steering_override = -127;
 		}
 	}
+#endif // FEATURE_DIGITAL
 
+#if FEATURE_DEBUG
 	// DEBUG: hitung berapa kali hook dipanggil selama X / D-pad kiri ditahan
 	dbg_x_held = (buttons & PSP_CTRL_CROSS) ? 1 : 0;
 	static int x_calls = 0;
@@ -273,7 +291,9 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 	}else{
 		left_calls = 0;
 	}
+#endif // FEATURE_DEBUG
 
+#if ENABLE_UDP
 	// UDP: input dari aplikasi Sketchware. Dipakai kalau analog/tombol
 	// fisik untuk fungsi yang sama sedang tidak aktif.
 	if(!override_accel && net_accel){
@@ -296,6 +316,7 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
 		override_steering = 1;
 		steering_override = net_steer * NET_STEER_SIGN;
 	}
+#endif // ENABLE_UDP
 
 	LOG_VERBOSE("timestamp: %lu lx: %d ly: %d rx: %d ry: %d", timestamp, lx, ly, rx, ry);
 }
@@ -388,9 +409,13 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 	short *throttle = (short *)(&param_3[0x8]);
 	short *brake = (short *)(&param_3[0xA]);
 	// analog reverse, also has the weird response curve
+#if FEATURE_REVERSE
 	short *reverse = (short *)(&param_3[0xc]);   // REVERSE (sebelumnya di-comment)
+#endif
 	// an analog handbrake
+#if FEATURE_HANDBRAKE
 	short *handbrake = (short *)(&param_3[0xe]);   // HANDBRAKE (sebelumnya di-comment)
+#endif
 
 	// no clutch..?
 
@@ -432,12 +457,14 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		*steering = steering_override * 0x2000 / 127;
 		LOG_VERBOSE("applying steering override, val is %d, steering is %d", steering_override, *steering);
 
+#if FEATURE_DEBUG
 		// DEBUG: catat penerapan setir secara berkala
 		static int steer_applied = 0;
 		steer_applied++;
 		if(steer_applied == 1 || steer_applied % 60 == 0){
 			LOG("steering applied #%d: override=%d, written=%d", steer_applied, steering_override, *steering);
 		}
+#endif
 	}else{
 		*steering = 0;
 	}
@@ -483,6 +510,7 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		LOG_VERBOSE("applying brake override, val is %d, brake is %d", brake_override, *brake);
 	}
 
+#if FEATURE_REVERSE
 	// REVERSE: nilai linear dulu. Kalau responsnya aneh (seperti gas),
 	// kurvanya perlu disetel ulang setelah dites.
 	if(override_reverse){
@@ -490,14 +518,18 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		*reverse = reverse_override * 0x1000 / 127;
 		LOG_VERBOSE("applying reverse override, val is %d, reverse is %d", reverse_override, *reverse);
 	}
+#endif // FEATURE_REVERSE
 
+#if FEATURE_HANDBRAKE
 	// HANDBRAKE: nilai linear dulu, kurva belum diketahui
 	if(override_handbrake){
 		param_3[0] = param_3[0] | 0x10;
 		*handbrake = handbrake_override * 0x1000 / 127;
 		LOG_VERBOSE("applying handbrake override, val is %d, handbrake is %d", handbrake_override, *handbrake);
 	}
+#endif // FEATURE_HANDBRAKE
 
+#if FEATURE_DEBUG
 	// DEBUG: lihat isi struct kontrol setelah plugin menulis, saat X ditahan
 	if(dbg_x_held){
 		static int x_hook_calls = 0;
@@ -505,9 +537,8 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		if(x_hook_calls == 1 || x_hook_calls % 30 == 0){
 			LOG("X in hook #%d: flags=0x%02x%02x throttle=%d", x_hook_calls, param_3[0], param_3[1], *throttle);
 		}
-	}else{
-		// reset penghitung lewat pengecekan berikutnya
 	}
+#endif // FEATURE_DEBUG
 
 	if(override_camera){
 		*camera_rotation = camera_override;
