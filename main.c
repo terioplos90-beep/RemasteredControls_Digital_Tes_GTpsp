@@ -3,12 +3,11 @@
   Buat GT PSP Euro v2.00 Asli - UCES01245
   Original Controls: TheFloW / Katharine Chui
     + Logika Tire Wear ala GT4 (cuma rumusnya doang, gamenya tetep GT PSP)
+  VERSI NO-LIBM: Tanpa fabsf/sinf/rand/%f, biar lolos -nostdlib
 */
 
 #include <pspctrl.h>
 #include <string.h>
-#include <math.h>
-#include <stdlib.h>
 #include "hooking.h"
 #include "disc_ident.h"
 #include "logging.h"
@@ -39,6 +38,7 @@ static int adjacent_axes = 0;
 // ============================================================
 // LOGIKA TIRE WEAR ALA GT4 - Buat GT PSP Euro v2.00
 // Wear 0-100: 0-30 HIJAU, 30-65 KUNING, 65-85 ORANGE, 85-100 MERAH
+// TANPA LIBM - semua manual
 // ============================================================
 typedef struct {
     float wear;
@@ -54,10 +54,12 @@ static int pit_count_gt4 = 0;
 static int gt4_initialized = 0;
 static float last_speed_gt4 = 0.0f;
 static float last_steer_gt4 = 0.0f;
+static int gt4_counter = 0;
 
 #define GT4_BAN_HABIS_KM_SOFT 55.0f
 #define GT4_GRIP_AWAL_SOFT 1.05f
 
+static float gt4_absf(float v){ if(v < 0.0f) return -v; return v; }
 static float gt4_clampf(float v, float mn, float mx){
     if(v < mn) return mn;
     if(v > mx) return mx;
@@ -65,37 +67,37 @@ static float gt4_clampf(float v, float mn, float mx){
 }
 
 static void gt4_reset_all(){
-    tireFL.wear = 0; tireFL.temp = 50; tireFL.grip = GT4_GRIP_AWAL_SOFT; tireFL.stage = 0; tireFL.is_flat = 0;
-    tireFR.wear = 0; tireFR.temp = 50; tireFR.grip = GT4_GRIP_AWAL_SOFT; tireFR.stage = 0; tireFR.is_flat = 0;
-    tireRL.wear = 0; tireRL.temp = 50; tireRL.grip = GT4_GRIP_AWAL_SOFT; tireRL.stage = 0; tireRL.is_flat = 0;
-    tireRR.wear = 0; tireRR.temp = 50; tireRR.grip = GT4_GRIP_AWAL_SOFT; tireRR.stage = 0; tireRR.is_flat = 0;
+    tireFL.wear = 0; tireFL.temp = 50.0f; tireFL.grip = GT4_GRIP_AWAL_SOFT; tireFL.stage = 0; tireFL.is_flat = 0;
+    tireFR.wear = 0; tireFR.temp = 50.0f; tireFR.grip = GT4_GRIP_AWAL_SOFT; tireFR.stage = 0; tireFR.is_flat = 0;
+    tireRL.wear = 0; tireRL.temp = 50.0f; tireRL.grip = GT4_GRIP_AWAL_SOFT; tireRL.stage = 0; tireRL.is_flat = 0;
+    tireRR.wear = 0; tireRR.temp = 50.0f; tireRR.grip = GT4_GRIP_AWAL_SOFT; tireRR.stage = 0; tireRR.is_flat = 0;
     total_km_gt4 = 0;
     gt4_initialized = 1;
 }
 
 static float gt4_calc_grip(TireGT4 *t){
     if(t->is_flat) return 0.30f;
-    if(t->wear < 30) t->stage = 0;
-    else if(t->wear < 65) t->stage = 1;
-    else if(t->wear < 85) t->stage = 2;
+    if(t->wear < 30.0f) t->stage = 0;
+    else if(t->wear < 65.0f) t->stage = 1;
+    else if(t->wear < 85.0f) t->stage = 2;
     else t->stage = 3;
     float g = 1.0f;
-    if(t->wear < 5){
+    if(t->wear < 5.0f){
         g = 0.96f + (t->wear * 0.01f);
-    } else if(t->wear < 30){
-        g = 1.01f + ((t->wear - 5) / 25.0f) * 0.04f;
-    } else if(t->wear < 65){
-        g = 1.05f - ((t->wear - 30) / 35.0f) * 0.13f;
-    } else if(t->wear < 85){
-        g = 0.92f - ((t->wear - 65) / 20.0f) * 0.17f;
+    } else if(t->wear < 30.0f){
+        g = 1.01f + ((t->wear - 5.0f) / 25.0f) * 0.04f;
+    } else if(t->wear < 65.0f){
+        g = 1.05f - ((t->wear - 30.0f) / 35.0f) * 0.13f;
+    } else if(t->wear < 85.0f){
+        g = 0.92f - ((t->wear - 65.0f) / 20.0f) * 0.17f;
     } else {
-        g = 0.75f - ((t->wear - 85) / 15.0f) * 0.27f;
+        g = 0.75f - ((t->wear - 85.0f) / 15.0f) * 0.27f;
     }
     float g_temp = 1.0f;
-    if(t->temp < 50) g_temp = 0.88f;
-    else if(t->temp < 75) g_temp = 0.88f + ((t->temp - 50)/25.0f)*0.12f;
-    else if(t->temp <= 105) g_temp = 1.0f;
-    else if(t->temp <= 135) g_temp = 1.0f - ((t->temp - 105)/30.0f)*0.25f;
+    if(t->temp < 50.0f) g_temp = 0.88f;
+    else if(t->temp < 75.0f) g_temp = 0.88f + ((t->temp - 50.0f)/25.0f)*0.12f;
+    else if(t->temp <= 105.0f) g_temp = 1.0f;
+    else if(t->temp <= 135.0f) g_temp = 1.0f - ((t->temp - 105.0f)/30.0f)*0.25f;
     else g_temp = 0.70f;
     g *= g_temp;
     return gt4_clampf(g, 0.30f, 1.08f);
@@ -103,6 +105,7 @@ static float gt4_calc_grip(TireGT4 *t){
 
 static void gt4_update(float steering_norm, float throttle_norm, float brake_norm, float dt){
     if(!gt4_initialized) gt4_reset_all();
+    gt4_counter++;
     float target = throttle_norm * 280.0f;
     if(brake_norm > 0.1f){
         last_speed_gt4 -= brake_norm * 180.0f * dt * 10.0f;
@@ -110,19 +113,19 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
     } else {
         last_speed_gt4 += (target - last_speed_gt4) * dt * 0.5f;
     }
-    if(last_speed_gt4 < 0) last_speed_gt4 = 0;
-    if(last_speed_gt4 > 320) last_speed_gt4 = 320;
+    if(last_speed_gt4 < 0.0f) last_speed_gt4 = 0.0f;
+    if(last_speed_gt4 > 320.0f) last_speed_gt4 = 320.0f;
     float speed = last_speed_gt4;
     float jarak_meter = (speed / 3.6f) * dt;
     total_km_gt4 += jarak_meter / 1000.0f;
-    float slip = fabsf(steering_norm) * (speed / 180.0f);
-    float steer_delta = fabsf(steering_norm - last_steer_gt4) / dt;
-    int is_braking_hard = (brake_norm > 0.7f && speed > 80);
-    int is_drifting = (slip > 0.7f && speed > 80);
-    int is_wheelspin = (throttle_norm > 0.9f && speed < 120);
+    float slip = gt4_absf(steering_norm) * (speed / 180.0f);
+    float steer_delta = gt4_absf(steering_norm - last_steer_gt4) / dt;
+    int is_braking_hard = (brake_norm > 0.7f && speed > 80.0f);
+    int is_drifting = (slip > 0.7f && speed > 80.0f);
+    int is_wheelspin = (throttle_norm > 0.9f && speed < 120.0f);
     float beban_kiri = 1.0f, beban_kanan = 1.0f;
     if(steering_norm > 0.2f){ beban_kiri = 1.0f + steering_norm * 1.4f; beban_kanan = 1.0f - steering_norm * 0.3f; }
-    else if(steering_norm < -0.2f){ beban_kanan = 1.0f + fabsf(steering_norm) * 1.4f; beban_kiri = 1.0f - fabsf(steering_norm) * 0.3f; }
+    else if(steering_norm < -0.2f){ beban_kanan = 1.0f + gt4_absf(steering_norm) * 1.4f; beban_kiri = 1.0f - gt4_absf(steering_norm) * 0.3f; }
     TireGT4* list[4] = {&tireFL, &tireFR, &tireRL, &tireRR};
     float beban[4] = {beban_kiri, beban_kanan, beban_kiri*0.85f, beban_kanan*0.85f};
     int is_front[4] = {1,1,0,0};
@@ -132,19 +135,19 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
         float heat = (speed/300.0f)*7.0f*dt + slip*22.0f*dt + steer_delta*0.002f*dt;
         if(is_front[i]) heat *= 1.35f;
         t->temp += heat - (2.8f*dt);
-        t->temp = gt4_clampf(t->temp, 20, 160);
+        t->temp = gt4_clampf(t->temp, 20.0f, 160.0f);
         float w = (jarak_meter / (GT4_BAN_HABIS_KM_SOFT * 1000.0f)) * 100.0f;
         w *= beban[i];
         if(slip > 0.2f) w *= (1.0f + slip * 6.0f);
         if(steer_delta > 2.0f && is_front[i]) w *= 1.8f;
-        if(t->temp > 130) w *= 2.0f;
-        if(t->temp < 55 && speed > 120) w *= 1.5f;
+        if(t->temp > 130.0f) w *= 2.0f;
+        if(t->temp < 55.0f && speed > 120.0f) w *= 1.5f;
         if(is_front[i]) w *= 1.50f;
         else w *= 1.0f;
         t->wear += w;
-        t->wear = gt4_clampf(t->wear, 0, 100);
-        if(t->wear >= 98 && t->temp > 125){
-            if((rand() % 1000) < 3) t->is_flat = 1;
+        t->wear = gt4_clampf(t->wear, 0.0f, 100.0f);
+        if(t->wear >= 98.0f && t->temp > 125.0f){
+            if((gt4_counter % 2000) == 0) t->is_flat = 1;
         }
         t->grip = gt4_calc_grip(t);
     }
@@ -155,11 +158,10 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
     static int lc = 0; lc++;
     if(lc >= 300){
         lc = 0;
-        const char* names[4] = {"HIJAU","KUNING","ORANGE","MERAH"};
-        LOG("GT4 TIRE | FL:%.0f%%[%s] FR:%.0f%%[%s] RL:%.0f%%[%s] RR:%.0f%%[%s] | Grip %.2f | Temp FL:%.0fC | KM:%.1f Pit:%d",
-            tireFL.wear, names[tireFL.stage], tireFR.wear, names[tireFR.stage],
-            tireRL.wear, names[tireRL.stage], tireRR.wear, names[tireRR.stage],
-            (tireFL.grip+tireFR.grip+tireRL.grip+tireRR.grip)/4.0f, tireFL.temp, total_km_gt4, pit_count_gt4);
+        LOG("GT4 TIRE | FL:%d FR:%d RL:%d RR:%d | KM:%d Pit:%d",
+            (int)tireFL.wear, (int)tireFR.wear,
+            (int)tireRL.wear, (int)tireRR.wear,
+            (int)total_km_gt4, pit_count_gt4);
     }
 }
 
@@ -224,19 +226,16 @@ int sceCtrlReadBufferPositivePatched(SceCtrlData *pad_data, int count){
 
 int set_offsets(char *disc_id, char *disc_version){
 	LOG("game_base_addr: 0x%lx", game_base_addr);
-	// EU v2.00 - PUNYA KAMU
 	if(strcmp("2.00", disc_version) == 0 && (strcmp("UCES01245", disc_id) == 0 || strcmp("UCUS98632", disc_id) == 0)){
 		offset_digital_to_analog = game_base_addr + 0x14eb40;
 		offset_populate_car_digital_control = game_base_addr + 0x126b50;
 		offset_populate_car_analog_control = game_base_addr + 0x126dec;
 		return 0;
 	}
-	// ASIA v1.00
 	if(strcmp("1.00", disc_version) == 0 && strcmp("UCAS40265", disc_id) == 0){
 		offset_populate_car_analog_control = game_base_addr + 0x126dec;
 		return 0;
 	}
-	// JP v1.01
 	if(strcmp("1.01", disc_version) == 0 && strcmp("UCJS10100", disc_id) == 0){
 		offset_populate_car_analog_control = game_base_addr + 0x126dd0;
 		return 0;
@@ -254,11 +253,11 @@ void digital_to_analog_patched(u32 *param_1, u32 *param_2){
 	digital_to_analog_orig(param_1, param_2);
 	if(*accel_as_int != 0 && override_accel){
 		*accel = (float)accel_override / 127.0f;
-		if(*accel > 1.0){ *accel = 1.0; }
+		if(*accel > 1.0f){ *accel = 1.0f; }
 	}
 	if(*brake_as_int != 0 && override_brake){
 		*brake = (float)brake_override / 127.0f;
-		if(*brake > 1.0){ *brake = 1.0; }
+		if(*brake > 1.0f){ *brake = 1.0f; }
 	}
 }
 
@@ -290,16 +289,15 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 	#endif
 		SceCtrlData pad_data; int res = sceCtrlPeekBufferPositive(&pad_data, 1); sample_input(&pad_data, res, 0);
 		if((pad_data.Buttons & PSP_CTRL_SELECT) && (pad_data.Buttons & PSP_CTRL_START)){
-			gt4_reset_all(); pit_count_gt4++; LOG("GT4 PIT! Ban baru Soft dipasang. Pit ke-%d", pit_count_gt4);
+			gt4_reset_all(); pit_count_gt4++; LOG("GT4 PIT! Ban baru. Pit ke-%d", pit_count_gt4);
 			sceKernelDelayThread(500000);
 		}
 	}
 	float steer_norm2 = (float)steering_override / 127.0f;
-	float thr_norm2 = override_accel ? (float)accel_override / 127.0f : 0;
-	float brk_norm2 = override_brake ? (float)brake_override / 127.0f : 0;
-	if(!override_steering) steer_norm2 = 0;
+	float thr_norm2 = override_accel ? (float)accel_override / 127.0f : 0.0f;
+	float brk_norm2 = override_brake ? (float)brake_override / 127.0f : 0.0f;
+	if(!override_steering) steer_norm2 = 0.0f;
 	gt4_update(steer_norm2, thr_norm2, brk_norm2, 1.0f/60.0f);
-	float grip_all = gt4_avg_grip();
 	float grip_f = gt4_front_grip();
 	float grip_r = gt4_rear_grip();
 
@@ -310,15 +308,17 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 			steer_final *= (0.60f + grip_f * 0.40f);
 		}
 		if(grip_r < 0.80f){
-			static float ph = 0; ph += 0.35f;
-			float wobble = sinf(ph) * (0.80f - grip_r) * 30.0f;
+			static int ph = 0; ph += 7;
+			int tri = (ph % 100) - 50;
+			if(tri < 0) tri = -tri;
+			float wobble = (float)(tri - 25) * (0.80f - grip_r) * 0.8f;
 			steer_final += wobble;
 			steer_final *= (1.0f + (0.80f - grip_r) * 0.5f);
 		}
-		if(steer_final > 127) steer_final = 127;
-		if(steer_final < -127) steer_final = -127;
+		if(steer_final > 127.0f) steer_final = 127.0f;
+		if(steer_final < -127.0f) steer_final = -127.0f;
 		*steering = (short)(steer_final * 0x2000 / 127);
-		LOG_VERBOSE("applying steering override, val is %d, steering is %d, grip %.2f", steering_override, *steering, grip_all);
+		LOG_VERBOSE("applying steering override, val is %d, steering is %d", steering_override, *steering);
 	}else{ *steering = 0; }
 
 	if(override_accel){
@@ -326,7 +326,7 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		int thr_eff = accel_override;
 		if(grip_r < 0.85f){
 			thr_eff = (int)(accel_override * (0.65f + grip_r * 0.35f));
-			if((rand() % 100) < (int)((0.85f - grip_r) * 90)){
+			if((gt4_counter % 100) < (int)((0.85f - grip_r) * 90.0f)){
 				thr_eff = (int)(thr_eff * 0.45f);
 			}
 		}
@@ -334,7 +334,7 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 		else if(thr_eff >= 64){ static short base = (0x1000 * 0.91f); static short offset_throttle = (0x1000 * (0.96f - 0.91f)); int throttle_segment = thr_eff - 64; static int range = 94 - 64; *throttle = base + throttle_segment * offset_throttle / range; }
 		else if(thr_eff >= 32){ static short base = (0x1000 * 0.81f); static short offset_throttle = (0x1000 * (0.91f - 0.81f)); int throttle_segment = thr_eff - 32; static int range = 63 - 32; *throttle = base + throttle_segment * offset_throttle / range; }
 		else{ static short base = (0x1000 * 0.71f); static short offset_throttle = (0x1000 * (0.81f - 0.71f)); int throttle_segment = thr_eff; static int range = 31; *throttle = base + throttle_segment * offset_throttle / range; }
-		LOG_VERBOSE("applying accel override, val is %d, throttle is %d, grip %.2f", accel_override, *throttle, grip_all);
+		LOG_VERBOSE("applying accel override, val is %d, throttle is %d", accel_override, *throttle);
 	}
 	if(override_brake){
 		param_3[0] = param_3[0] | 4;
@@ -343,7 +343,7 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 			brk_eff = (int)(brake_override * (0.50f + grip_f * 0.50f));
 		}
 		*brake = brk_eff * 0x1000 / 127;
-		LOG_VERBOSE("applying brake override, val is %d, brake is %d, grip %.2f", brake_override, *brake, grip_all);
+		LOG_VERBOSE("applying brake override, val is %d, brake is %d", brake_override, *brake);
 	}
 	if(override_camera){ *camera_rotation = camera_override; }
 	pspSdkSetK1(k1);
