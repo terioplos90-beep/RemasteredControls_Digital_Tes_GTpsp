@@ -417,12 +417,10 @@ int init() {
     if (is_emulator) { adjacent_axes = 1; outer_deadzone = 124; inner_deadzone = 3; }
     parse_config();
     gt4_reset_all();
-    SceUID hud_thid = sceKernelCreateThread("gt4_hud", gt4_hud_thread, 0x18, 0x10000, 0, NULL);
-    if (hud_thid >= 0) sceKernelStartThread(hud_thid, 0, NULL);
+    
     HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
-    HIJACK_FUNCTION(offset_populate_car_digital_control, populate_car_digital_control_patched, populate_car_digital_control_orig);
-    HIJACK_FUNCTION(offset_digital_to_analog, digital_to_analog_patched, digital_to_analog_orig);
-    LOG("GT4 INIT OK - HOOKED ALL");
+    
+    LOG("GT4 INIT OK - HOOKED ANALOG ONLY");
     if (is_emulator) { sceKernelDelayThread(1000 * 1000 * 5); sceCtrlSetSamplingCycle(5555); }
     return 0;
 }
