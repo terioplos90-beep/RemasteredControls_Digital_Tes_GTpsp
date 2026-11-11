@@ -8,6 +8,7 @@
 #include <pspctrl.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 #include "hooking.h"
 #include "disc_ident.h"
 #include "logging.h"
