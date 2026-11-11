@@ -11,7 +11,7 @@ PRX_EXPORTS = exports.exp
 # use kernel "libc"
 USE_KERNEL_LIBS = 1
 
-LIBS = -lpspsystemctrl_kernel -lpspnet_inet -lpspnet
+LIBS = -lpspsystemctrl_kernel -lpspnet_inet -lpspnet -lpspdebug -lpspdisplay_driver -lpspctrl_driver -lpspmodinfo -lpspsdk -lpspkernel -lpspgu -lpspgum -lpspge
 
 PSP_FW_VERSION=661
 
