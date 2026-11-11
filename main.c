@@ -2,12 +2,13 @@
   Remastered Controls: RemasteredControls_GTpsp
   Buat GT PSP Euro v2.00 Asli - UCES01245
   Original Controls: TheFloW / Katharine Chui
-    + Logika Tire Wear ala GT4 (cuma rumusnya doang, gamenya tetep GT PSP)
-  VERSI NO-LIBM: Tanpa fabsf/sinf/rand/%f, biar lolos -nostdlib
+    + Logika Tire Wear ala GT4 + HUD Indikator Ban
+  VERSI NO-LIBM + HUD VRAM
 */
 
 #include <pspctrl.h>
 #include <string.h>
+#include <pspdisplay.h>
 #include "hooking.h"
 #include "disc_ident.h"
 #include "logging.h"
@@ -37,8 +38,6 @@ static int adjacent_axes = 0;
 
 // ============================================================
 // LOGIKA TIRE WEAR ALA GT4 - Buat GT PSP Euro v2.00
-// Wear 0-100: 0-30 HIJAU, 30-65 KUNING, 65-85 ORANGE, 85-100 MERAH
-// TANPA LIBM - semua manual
 // ============================================================
 typedef struct {
     float wear;
@@ -55,8 +54,9 @@ static int gt4_initialized = 0;
 static float last_speed_gt4 = 0.0f;
 static float last_steer_gt4 = 0.0f;
 static int gt4_counter = 0;
+static int gt4_hud_on = 1;
 
-#define GT4_BAN_HABIS_KM_SOFT 55.0f
+#define GT4_BAN_HABIS_KM_SOFT 7.0f
 #define GT4_GRIP_AWAL_SOFT 1.05f
 
 static float gt4_absf(float v){ if(v < 0.0f) return -v; return v; }
@@ -101,6 +101,64 @@ static float gt4_calc_grip(TireGT4 *t){
     else g_temp = 0.70f;
     g *= g_temp;
     return gt4_clampf(g, 0.30f, 1.08f);
+}
+
+// ============================================================
+// HUD - Gambar langsung ke VRAM, nempel di atas game
+// Pojok kiri atas: FL FR RL RR
+// ============================================================
+static void gt4_put_pixel(void *fb, int bw, int fmt, int x, int y, int r, int g, int b){
+    if(x < 0 || y < 0 || x >= 480 || y >= 272) return;
+    if(fmt == 3){
+        unsigned int *p = (unsigned int*)fb;
+        p[y * bw + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+    } else {
+        unsigned short *p = (unsigned short*)fb;
+        unsigned short c = (unsigned short)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+        p[y * bw + x] = c;
+    }
+}
+static void gt4_fill_rect(void *fb, int bw, int fmt, int x0, int y0, int w, int h, int r, int g, int b){
+    for(int y=0;y<h;y++){
+        for(int x=0;x<w;x++){
+            gt4_put_pixel(fb,bw,fmt,x0+x,y0+y,r,g,b);
+        }
+    }
+}
+static void gt4_draw_hud(){
+    if(!gt4_hud_on) return;
+    if(!gt4_initialized) return;
+    void *fb = 0; int bw = 0; int fmt = 0;
+    if(sceDisplayGetFrameBuf(&fb, &bw, &fmt, 0) < 0) return;
+    if(!fb) return;
+    if(bw <= 0 || bw > 1024) return;
+    TireGT4* list[4] = {&tireFL, &tireFR, &tireRL, &tireRR};
+    // Background HUD - kotak hitam transparan ala GT4
+    gt4_fill_rect(fb,bw,fmt, 8, 8, 92, 52, 0, 0, 0);
+    for(int i=0;i<4;i++){
+        int y = 12 + i * 11;
+        int wear = (int)list[i]->wear;
+        int remain = 100 - wear;
+        if(remain < 0) remain = 0;
+        int bar_w = (remain * 60) / 100;
+        int r=0,g=0,b=0;
+        if(list[i]->is_flat){ r=255; g=0; b=0; }
+        else if(list[i]->stage == 0){ r=0; g=255; b=0; }
+        else if(list[i]->stage == 1){ r=255; g=255; b=0; }
+        else if(list[i]->stage == 2){ r=255; g=140; b=0; }
+        else { r=255; g=0; b=0; }
+        // Bar background abu-abu
+        gt4_fill_rect(fb,bw,fmt, 30, y, 62, 7, 60, 60, 60);
+        // Bar isi sesuai sisa ban
+        if(bar_w > 0) gt4_fill_rect(fb,bw,fmt, 30, y, bar_w, 7, r, g, b);
+        // Kotak kecil penanda ban - FL FR RL RR beda warna dikit biar ketahuan
+        gt4_fill_rect(fb,bw,fmt, 12, y, 14, 7, 255, 255, 255);
+        gt4_fill_rect(fb,bw,fmt, 13, y+1, 12, 5, r, g, b);
+        // Kalau flat, kedip-kedip merah
+        if(list[i]->is_flat && ((gt4_counter % 60) < 30)){
+            gt4_fill_rect(fb,bw,fmt, 30, y, 62, 7, 255, 0, 0);
+        }
+    }
 }
 
 static void gt4_update(float steering_norm, float throttle_norm, float brake_norm, float dt){
@@ -163,12 +221,9 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
             (int)tireRL.wear, (int)tireRR.wear,
             (int)total_km_gt4, pit_count_gt4);
     }
+    gt4_draw_hud();
 }
 
-static float gt4_avg_grip(){
-    float g = (tireFL.grip + tireFR.grip + tireRL.grip + tireRR.grip) / 4.0f;
-    return gt4_clampf(g, 0.30f, 1.08f);
-}
 static float gt4_front_grip(){ return (tireFL.grip + tireFR.grip) / 2.0f; }
 static float gt4_rear_grip(){ return (tireRL.grip + tireRR.grip) / 2.0f; }
 
@@ -381,7 +436,7 @@ int init(){
 	gt4_reset_all();
 	HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
 	if(is_emulator){ sceKernelDelayThread(1000 * 1000 * 5); LOG("boosting input sampling on ppsspp"); sceCtrlSetSamplingCycle(5555); }
-	LOG("main thread finishes - GT4 Tire Wear ACTIVE for GT PSP Euro v2.00");
+	LOG("main thread finishes - GT4 Tire Wear + HUD ACTIVE");
 	return 0;
 }
 #ifndef IRSHELL
