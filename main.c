@@ -1,8 +1,6 @@
 #include <pspctrl.h>
 #include <string.h>
 #include <pspdisplay.h>
-#include <pspgu.h>
-#include <pspgum.h>
 #include "hooking.h"
 #include "disc_ident.h"
 #include "logging.h"
@@ -59,46 +57,45 @@ static float gt4_calc_grip(TireGT4 *t){
     if(t->temp < 50.0f) g -= 0.05f;
     return gt4_clampf(g, 0.30f, 1.05f);
 }
-static unsigned int __attribute__((aligned(16))) gu_list[262144];
-static int gu_initialized = 0;
-typedef struct { float x, y, z; unsigned int color; } GuVertex;
-static void gu_rect(float x, float y, float w, float h, unsigned int color){
-    GuVertex* v = (GuVertex*)sceGuGetMemory(sizeof(GuVertex) * 2);
-    v[0].x = x; v[0].y = y; v[0].z = 0; v[0].color = color;
-    v[1].x = x + w; v[1].y = y + h; v[1].z = 0; v[1].color = color;
-    sceGuDrawArray(GU_SPRITES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D, 2, 0, v);
+static void vram_rect(int x, int y, int w, int h, unsigned int color){
+    void *fb = NULL; int stride = 0; int fmt = 0;
+    sceDisplayGetFrameBuf(&fb, &stride, &fmt);
+    if(!fb) return;
+    if(fmt == 3){
+        unsigned int *p = (unsigned int*)fb;
+        for(int yy=y; yy<y+h; yy++){ if(yy<0||yy>=272) continue; for(int xx=x; xx<x+w; xx++){ if(xx<0||xx>=480) continue; p[yy*stride+xx] = color; } }
+    } else {
+        unsigned short *p = (unsigned short*)fb;
+        unsigned short c = ((color>>3)&0x1F) | (((color>>10)&0x3F)<<5) | (((color>>19)&0x1F)<<11);
+        if(fmt!=0) c = ((color>>3)&0x1F) | (((color>>10)&0x1F)<<5) | (((color>>19)&0x1F)<<10) | 0x8000;
+        for(int yy=y; yy<y+h; yy++){ if(yy<0||yy>=272) continue; for(int xx=x; xx<x+w; xx++){ if(xx<0||xx>=480) continue; p[yy*stride+xx] = c; } }
+    }
 }
-static void gt4_draw_hud_gu(){
+static void gt4_draw_hud_vram(){
     if(!gt4_hud_on) return; if(!gt4_initialized) return;
-    if(!gu_initialized){ sceGuInit(); gu_initialized = 1; }
-    sceGuStart(GU_DIRECT, gu_list);
-    sceGuDisable(GU_DEPTH_TEST); sceGuDisable(GU_TEXTURE_2D);
-    sceGuEnable(GU_BLEND); sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
     TireGT4* list[4] = {&tireFL, &tireFR, &tireRL, &tireRR};
-    float HUD_X = 180; float HUD_Y = 38;
-    gu_rect(HUD_X-4, HUD_Y-4, 122, 54, 0xCC000000);
-    gu_rect(HUD_X-4, HUD_Y-4, 122, 2, 0xFFFFFFFF);
-    gu_rect(HUD_X-4, HUD_Y+48, 122, 2, 0xFFFFFFFF);
+    int HUD_X = 180; int HUD_Y = 30;
+    vram_rect(HUD_X-4, HUD_Y-4, 122, 54, 0xFF000000);
+    vram_rect(HUD_X-4, HUD_Y-4, 122, 2, 0xFFFFFFFF);
+    vram_rect(HUD_X-4, HUD_Y+48, 122, 2, 0xFFFFFFFF);
     for(int i=0;i<4;i++){
-        float y = HUD_Y + i * 11;
+        int y = HUD_Y + i * 11;
         int remain = 100 - (int)list[i]->wear; if(remain < 0) remain = 0;
-        float bar_w = (remain * 80) / 100.0f;
+        int bar_w = (remain * 80) / 100;
         unsigned int col = 0xFF00FF00;
         if(list[i]->is_flat) col = 0xFF0000FF;
-        else if(list[i]->stage == 1) col = 0xFF00FFFF;
+        else if(list[i]->stage == 1) col = 0xFFFFFF00;
         else if(list[i]->stage == 2) col = 0xFF0080FF;
         else if(list[i]->stage == 3) col = 0xFF0000FF;
-        gu_rect(HUD_X, y, 18, 8, 0xFFFFFFFF);
-        gu_rect(HUD_X+1, y+1, 16, 6, col);
-        gu_rect(HUD_X+22, y, 82, 8, 0xFF3C3C3C);
-        if(bar_w > 0) gu_rect(HUD_X+22, y, bar_w, 8, col);
-        if(list[i]->is_flat && ((gt4_counter % 60) < 30)) gu_rect(HUD_X+22, y, 82, 8, 0xFF0000FF);
+        vram_rect(HUD_X, y, 18, 8, 0xFFFFFFFF);
+        vram_rect(HUD_X+1, y+1, 16, 6, col);
+        vram_rect(HUD_X+22, y, 82, 8, 0xFF3C3C3C);
+        if(bar_w > 0) vram_rect(HUD_X+22, y, bar_w, 8, col);
+        if(list[i]->is_flat && ((gt4_counter % 60) < 30)) vram_rect(HUD_X+22, y, 82, 8, 0xFF0000FF);
     }
-    sceGuFinish(); sceGuSync(0, 0);
 }
 static int gt4_hud_thread(SceSize args, void *argp){
-    LOG("GT4 HUD thread started - GU MODE");
-    while(1){ sceDisplayWaitVblankStart(); gt4_draw_hud_gu(); sceKernelDelayThread(16666); }
+    while(1){ gt4_draw_hud_vram(); sceKernelDelayThread(2000); }
     return 0;
 }
 static void gt4_update(float steering_norm, float throttle_norm, float brake_norm, float dt){
@@ -107,7 +104,8 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
     float target = throttle_norm * 280.0f;
     if(brake_norm > 0.1f){ last_speed_gt4 -= brake_norm * 180.0f * dt * 10.0f; if(last_speed_gt4 < target) last_speed_gt4 = target; }
     else { last_speed_gt4 += (target - last_speed_gt4) * dt * 0.5f; }
-    if(last_speed_gt4 < 0.0f) last_speed_gt4 = 0.0f; if(last_speed_gt4 > 320.0f) last_speed_gt4 = 320.0f;
+    if(last_speed_gt4 < 0.0f) last_speed_gt4 = 0.0f;
+    if(last_speed_gt4 > 320.0f) last_speed_gt4 = 320.0f;
     float speed = last_speed_gt4;
     float jarak_meter = (speed / 3.6f) * dt; total_km_gt4 += jarak_meter / 1000.0f;
     float slip = gt4_absf(steering_norm) * (speed / 180.0f);
@@ -126,22 +124,23 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
         float heat = (speed/300.0f)*7.0f*dt + slip*22.0f*dt + steer_delta*0.002f*dt;
         if(is_front[i]) heat *= 1.35f;
         t->temp += heat - (2.8f*dt); t->temp = gt4_clampf(t->temp, 20.0f, 160.0f);
-        float w = (jarak_meter / (GT4_BAN_HABIS_KM_SOFT * 1000.0f)) * 100.0f * 3.0f;
+        float w = (jarak_meter / (GT4_BAN_HABIS_KM_SOFT * 1000.0f)) * 100.0f;
         w *= beban[i];
-        if(slip > 0.2f) w *= (1.0f + slip * 1.5f);
-        if(steer_delta > 2.0f && is_front[i]) w *= 1.8f;
-        if(t->temp > 130.0f) w *= 2.0f;
-        if(t->temp < 55.0f && speed > 120.0f) w *= 1.5f;
-        if(is_front[i]) w *= 1.20f; else w *= 1.60f;
+        if(slip > 0.2f) w *= (1.0f + slip * 0.5f);
+        if(steer_delta > 2.0f && is_front[i]) w *= 1.3f;
+        if(t->temp > 130.0f) w *= 1.5f;
+        if(t->temp < 55.0f && speed > 120.0f) w *= 1.2f;
+        if(is_front[i]) w *= 1.05f; else w *= 1.15f;
         t->wear += w; t->wear = gt4_clampf(t->wear, 0.0f, 100.0f);
         if(t->wear >= 98.0f && t->temp > 125.0f){ if((gt4_counter % 2000) == 0) t->is_flat = 1; }
         t->grip = gt4_calc_grip(t);
     }
-    if(is_braking_hard){ tireFL.wear += 2.0f * dt; tireFR.wear += 2.0f * dt; }
-    if(is_drifting){ tireRL.wear += 3.0f * dt; tireRR.wear += 3.0f * dt; }
-    if(is_wheelspin){ tireRL.wear += 2.0f * dt; tireRR.wear += 2.0f * dt; }
+    if(is_braking_hard){ tireFL.wear += 0.02f; tireFR.wear += 0.02f; }
+    if(is_drifting){ tireRL.wear += 0.03f; tireRR.wear += 0.03f; }
+    if(is_wheelspin){ tireRL.wear += 0.02f; tireRR.wear += 0.02f; }
+    tireFL.wear = gt4_clampf(tireFL.wear, 0.0f, 100.0f); tireFR.wear = gt4_clampf(tireFR.wear, 0.0f, 100.0f); tireRL.wear = gt4_clampf(tireRL.wear, 0.0f, 100.0f); tireRR.wear = gt4_clampf(tireRR.wear, 0.0f, 100.0f);
     last_steer_gt4 = steering_norm;
-    static int lc = 0; lc++; if(lc >= 300){ lc = 0; LOG("GT4 TIRE | FL:%d FR:%d RL:%d RR:%d | KM:%d Pit:%d", (int)tireFL.wear, (int)tireFR.wear, (int)tireRL.wear, (int)tireRR.wear, (int)total_km_gt4, pit_count_gt4); }
+    static int lc = 0; lc++; if(lc >= 60){ lc = 0; LOG("GT4 TIRE | FL:%d FR:%d RL:%d RR:%d | KM:%d | THR:%d BRK:%d STR:%d", (int)tireFL.wear, (int)tireFR.wear, (int)tireRL.wear, (int)tireRR.wear, (int)total_km_gt4, override_accel?accel_override:0, override_brake?brake_override:0, steering_override); }
 }
 static float gt4_front_grip(){ return (tireFL.grip + tireFR.grip) / 2.0f; }
 static float gt4_rear_grip(){ return (tireRL.grip + tireRR.grip) / 2.0f; }
@@ -210,8 +209,6 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
     short *steering = (short *)(&param_3[4]); float *camera_rotation = (float *)(&param_3[0x2c]); short *throttle = (short *)(&param_3[0x8]); short *brake = (short *)(&param_3[0xA]);
     param_3[0] = 0; param_3[1] = 0; int k1 = pspSdkSetK1(0);
     int mode; sceCtrlGetSamplingMode(&mode); if(mode != PSP_CTRL_MODE_ANALOG){ sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG); return; }
-    { SceCtrlData pad_data; int res = sceCtrlPeekBufferPositive(&pad_data, 1); sample_input(&pad_data, res, 0);
-      if((pad_data.Buttons & PSP_CTRL_SELECT) && (pad_data.Buttons & PSP_CTRL_START)){ gt4_reset_all(); pit_count_gt4++; sceKernelDelayThread(500000); } }
     float steer_norm2 = (float)steering_override / 127.0f; float thr_norm2 = override_accel ? (float)accel_override / 127.0f : 0.0f; float brk_norm2 = override_brake ? (float)brake_override / 127.0f : 0.0f;
     if(!override_steering) steer_norm2 = 0.0f;
     gt4_update(steer_norm2, thr_norm2, brk_norm2, 1.0f/60.0f);
@@ -222,11 +219,8 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
         if(steer_final > 127.0f) steer_final = 127.0f; if(steer_final < -127.0f) steer_final = -127.0f;
         *steering = (short)(steer_final * 0x2000 / 127); }
     else{ *steering = 0; }
-    if(override_accel){ param_3[0] = param_3[0] | 2; int thr_eff = accel_override;
-        if(accel_override >= 120){ *throttle = 4096; if(grip_r < 0.90f){ *throttle = (short)(4096 * (0.60f + grip_r * 0.40f)); } }
-        else { if(thr_eff >= 95){ *throttle = 3932 + (thr_eff-95)*5; } else if(thr_eff >= 64){ *throttle = 3727 + (thr_eff-64)*6; } else if(thr_eff >= 32){ *throttle = 3317 + (thr_eff-32)*13; } else { *throttle = 2908 + thr_eff*13; } if(grip_r < 0.85f){ *throttle = (short)(*throttle * (0.65f + grip_r * 0.35f)); } }
-    }
-    if(override_brake){ param_3[0] = param_3[0] | 4; int brk_eff = brake_override; if(grip_f < 0.85f){ brk_eff = (int)(brake_override * (0.50f + grip_f * 0.50f)); } if(brake_override >= 120 && grip_f < 0.80f){ brk_eff = (int)(brake_override * 0.55f); } *brake = brk_eff * 0x1000 / 127; }
+    if(override_accel){ param_3[0] = param_3[0] | 2; *throttle = 4096; if(grip_r < 0.90f){ *throttle = (short)(4096 * (0.60f + grip_r * 0.40f)); } }
+    if(override_brake){ param_3[0] = param_3[0] | 4; int brk_eff = 127; if(grip_f < 0.85f){ brk_eff = (int)(127 * (0.50f + grip_f * 0.50f)); } if(grip_f < 0.80f){ brk_eff = (int)(127 * 0.55f); } *brake = brk_eff * 0x1000 / 127; }
     if(override_camera){ *camera_rotation = camera_override; }
     pspSdkSetK1(k1);
 }
@@ -241,12 +235,16 @@ void parse_config(){
 }
 int init(){
     char disc_id[50]; char disc_version[50]; int disc_id_valid = get_disc_id_version(disc_id, disc_version) == 0; if(!disc_id_valid){ return -1; }
-    if(set_offsets(disc_id, disc_version) != 0){ return -1; }
+    LOG("GT4 INIT disc=%s ver=%s", disc_id, disc_version);
+    if(set_offsets(disc_id, disc_version) != 0){ LOG("GT4 INIT OFFSET FAIL"); return -1; }
     if(is_emulator){ adjacent_axes = 1; outer_deadzone = 124; inner_deadzone = 3; }
     parse_config(); gt4_reset_all();
     SceUID hud_thid = sceKernelCreateThread("gt4_hud", gt4_hud_thread, 0x18, 0x10000, 0, NULL);
     if(hud_thid >= 0){ sceKernelStartThread(hud_thid, 0, NULL); }
     HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
+    HIJACK_FUNCTION(offset_populate_car_digital_control, populate_car_digital_control_patched, populate_car_digital_control_orig);
+    HIJACK_FUNCTION(offset_digital_to_analog, digital_to_analog_patched, digital_to_analog_orig);
+    LOG("GT4 INIT OK - HOOKED ALL");
     if(is_emulator){ sceKernelDelayThread(1000 * 1000 * 5); sceCtrlSetSamplingCycle(5555); }
     return 0;
 }
@@ -255,19 +253,4 @@ int StartPSP(SceModule2 *mod) { char namebuf[sizeof(mod->modname) + 1] = {0}; me
 #else
 int irshell_find_module(SceSize args, void *argp){ int cycles = 0; while(cycles < 60){ SceUID modules[256] = {0}; SceKernelModuleInfo info = {0}; int count = 0; if(sceKernelGetModuleIdList(modules, sizeof(modules), &count) >= 0){ for(int i =0;i < count;i++){ info.size = sizeof(SceKernelModuleInfo); if(sceKernelQueryModuleInfo(modules[i], &info) < 0){ continue; } char namebuf[sizeof(info.name) + 1] = {0}; memcpy(namebuf, info.name, sizeof(info.name)); if(strcmp(namebuf, GAME_MODULE_NAME) == 0){ game_base_addr = info.text_addr + 0x28; } } if(game_base_addr != 0){ init(); sceKernelExitDeleteThread(0); return 0; } } sceKernelDelayThread(1000 * 1000); cycles++; } sceKernelExitDeleteThread(0); return 0; }
 #endif
-static void StartPPSSPP() { SceUID modules[256]; SceKernelModuleInfo info; int i, count = 0; if (sceKernelGetModuleIdList(modules, sizeof(modules), &count) >= 0){ for (i = 0; i < count; ++i){ info.size = sizeof(SceKernelModuleInfo); if (sceKernelQueryModuleInfo(modules[i], &info) < 0){ continue; } char namebuf[sizeof(info.name) + 1] = {0}; memcpy(namebuf, info.name, sizeof(info.name)); if(strcmp(namebuf, GAME_MODULE_NAME) == 0){ game_base_addr = info.text_addr; } } if(game_base_addr != 0){ init(); } } }
-int module_start(SceSize args, void *argp){
-    #if DEBUG_LOG
-    sceIoRemove("ms0:/PSP/"MODULE_NAME".log"); sceIoRemove("ef0:/PSP/"MODULE_NAME".log");
-    #endif
-    is_emulator = sceIoDevctl("kemulator:", EMULATOR_DEVCTL__IS_EMULATOR, NULL, 0, NULL, 0) == 0;
-    if (is_emulator){ StartPPSSPP(); }else{
-        #ifndef IRSHELL
-        previous = sctrlHENSetStartModuleHandler(StartPSP);
-        #else
-        SceUID thid = sceKernelCreateThread("irshell_find_module", irshell_find_module, 0x18, 0x10000, 0, NULL); if(thid < 0){ return 0; } sceKernelStartThread(thid, 0, NULL);
-        #endif
-    }
-    return 0;
-}
-int module_stop(SceSize args, void *argp){ return 0; }
+static void StartPPSSPP() { SceUID modules[256]; SceKernelModuleInfo info; int i, count = 0; if (sceKernelGetModuleIdList(modules, sizeof(modules), &count) >=
