@@ -92,7 +92,7 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
   tireRR.wear = gt4_clampf(tireRR.wear,0,100);
   last_steer_gt4 = steering_norm;
   // Log buat tes: 1 lap = 100%
-  pspDebugScreenPrintf("GT4 KM:%.2f FL:%.0f FR:%.0f RL:%.0f RR:%.0f\n", total_km_gt4, tireFL.wear, tireFR.wear, tireRL.wear, tireRR.wear);
+  //pspDebugScreenPrintf("GT4 KM:%.2f FL:%.0f FR:%.0f RL:%.0f RR:%.0f\n", total_km_gt4, tireFL.wear, tireFR.wear, tireRL.wear, tireRR.wear);
 }
 
 static float gt4_front_grip(){ return (tireFL.grip + tireFR.grip) / 2.0f; }
@@ -128,7 +128,6 @@ int populate_car_analog_control_patched(void *car, SceCtrlData *pad){
 // ===== MODULE =====
 int module_start(SceSize args, void *argp){
   gt4_reset_all();
-  pspDebugScreenInit();
   return 0;
 }
 
