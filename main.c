@@ -610,9 +610,12 @@ if(override_brake || udp_square_pressed){
         *brake = 4096;
     }else{
         *brake = brake_override * 0x1000 / 127;
-    }
+    
+	}if(override_camera){
+*camera_rotation = camera_override;
+	}
 
-    LOG_VERBOSE("applying brake, val is %d, brake is %d",
+	LOG_VERBOSE("applying brake, val is %d, brake is %d",
         brake_override, *brake);
 }
 
