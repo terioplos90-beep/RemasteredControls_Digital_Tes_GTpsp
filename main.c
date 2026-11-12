@@ -425,12 +425,22 @@ void parse_config(){
                 else LOG("not enabling camera controls");
             }else if(arg_idx == 1){
                 int num = _atoi(arg_buf);
-                if(num > 127) num = 127; if(num < 0) num = 0;
+                if(num > 127){
+    num = 127;
+}
+if(num < 0){
+    num = 0;
+}
                 LOG("overriding inner deadzone %d with %d", inner_deadzone, num);
                 inner_deadzone = num;
             }else if(arg_idx == 2){
                 int num = _atoi(arg_buf);
-                if(num > 127) num = 127; if(num < 0) num = 0;
+                if(num > 127){
+    num = 127;
+}
+if(num < 0){
+    num = 0;
+}
                 LOG("overriding outer deadzone %d with %d", outer_deadzone, num);
                 outer_deadzone = num;
             }
