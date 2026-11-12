@@ -1,9 +1,18 @@
+#include <pspkernel.h>
+#include <pspctrl.h>
+#include <pspdebug.h>
+#include <stdio.h>
+#include <string.h>
+
+PSP_MODULE_INFO("GTRemastered", 0x1006, 1, 0);
+PSP_MAIN_THREAD_ATTR(0);
+
 // ===== FUNGSI BAN GT4 - MODE TES 1 LAP HABIS =====
 #define GT4_TEST_MODE 1
 #if GT4_TEST_MODE
-  #define GT4_BAN_HABIS_KM 1.0f // TES: 1 KM = 100%
+  #define GT4_BAN_HABIS_KM 1.0f
 #else
-  #define GT4_BAN_HABIS_KM 7.0f // ASLI GT4: 7 KM = 100%
+  #define GT4_BAN_HABIS_KM 7.0f
 #endif
 
 typedef struct { float wear; float temp; float grip; int stage; int is_flat; } TireGT4;
@@ -26,16 +35,13 @@ static void gt4_reset_all(){
 
 static float gt4_calc_grip(TireGT4 *t){
   if(t->is_flat) return 0.30f;
-  // Logika GT4: 0-30% grip naik dikit, 30-65 turun pelan, 65-85 kerasa, 85+ drop
   float g;
   if(t->wear < 30) g = 1.05f + (t->wear / 30.0f) * 0.02f;
   else if(t->wear < 65) g = 1.07f - ((t->wear - 30) / 35.0f) * 0.12f;
   else if(t->wear < 85) g = 0.95f - ((t->wear - 65) / 20.0f) * 0.25f;
   else g = 0.70f - ((t->wear - 85) / 15.0f) * 0.40f;
-  // Suhu: dingin kurang grip, kepanasan juga kurang grip
   if(t->temp < 50) g -= 0.05f;
   if(t->temp > 125) g -= 0.15f;
-  // Stage buat HUD: 0=biru/hijau, 1=kuning, 2=orange, 3=merah
   if(t->wear < 30) t->stage=0;
   else if(t->wear < 65) t->stage=1;
   else if(t->wear < 85) t->stage=2;
@@ -50,27 +56,19 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
   else speed = last_speed_gt4 + (speed - last_speed_gt4) * dt * 0.5f;
   speed = gt4_clampf(speed, 0, 320);
   last_speed_gt4 = speed;
-
   float jarak_meter = (speed / 3.6f) * dt;
   total_km_gt4 += jarak_meter / 1000.0f;
-
   float slip = gt4_absf(steering_norm) * (speed / 180.0f);
-  float steer_delta = gt4_absf(steering_norm - last_steer_gt4) / dt;
   int is_drifting = (slip > 0.7f && speed > 80);
   int is_wheelspin = (throttle_norm > 0.9f && speed < 120);
   int is_braking_hard = (brake_norm > 0.7f && speed > 80);
-
   TireGT4* list[4] = {&tireFL, &tireFR, &tireRL, &tireRR};
   float beban[4] = {1.0f, 1.0f, 0.85f, 0.85f};
-  if(steering_norm > 0.2f) { beban[0] = 1.0f + steering_norm * 1.4f; beban[2] = beban[0] * 0.85f; }
-  if(steering_norm < -0.2f) { beban[1] = 1.0f + gt4_absf(steering_norm) * 1.4f; beban[3] = beban[1] * 0.85f; }
   int is_front[4] = {1,1,0,0};
-
+  if(steering_norm > 0.2f){ beban[0] = 1.0f + steering_norm * 1.4f; beban[2] = beban[0] * 0.85f; }
+  if(steering_norm < -0.2f){ beban[1] = 1.0f + gt4_absf(steering_norm) * 1.4f; beban[3] = beban[1] * 0.85f; }
   for(int i=0;i<4;i++){
     TireGT4 *t = list[i];
-    if(t->is_flat) continue;
-    // Suhu naik dari slip + kecepatan, turun karena pendinginan
-    
     if(t->is_flat) continue;
     float heat = (speed/300.0f)*7.0f*dt + slip*22.0f*dt;
     if(is_front[i]) heat *= 1.35f;
@@ -93,6 +91,47 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
   tireRL.wear = gt4_clampf(tireRL.wear,0,100);
   tireRR.wear = gt4_clampf(tireRR.wear,0,100);
   last_steer_gt4 = steering_norm;
+  // Log buat tes: 1 lap = 100%
+  pspDebugScreenPrintf("GT4 KM:%.2f FL:%.0f FR:%.0f RL:%.0f RR:%.0f\n", total_km_gt4, tireFL.wear, tireFR.wear, tireRL.wear, tireRR.wear);
 }
+
 static float gt4_front_grip(){ return (tireFL.grip + tireFR.grip) / 2.0f; }
 static float gt4_rear_grip(){ return (tireRL.grip + tireRR.grip) / 2.0f; }
+
+// ===== FUNGSI YANG DICARI LINKER - JANGAN DIHAPUS =====
+int sceCtrlReadBufferPositivePatched(SceCtrlData *pad, int count){
+  int ret = sceCtrlReadBufferPositive(pad, count);
+  if(ret > 0){
+    float steer = 0, thr = 0, brk = 0;
+    if(pad->Buttons & PSP_CTRL_LEFT) steer = -1.0f;
+    if(pad->Buttons & PSP_CTRL_RIGHT) steer = 1.0f;
+    if(pad->Buttons & PSP_CTRL_CROSS) thr = 1.0f;
+    if(pad->Buttons & PSP_CTRL_SQUARE) brk = 1.0f;
+    gt4_update(steer, thr, brk, 1.0f/60.0f);
+    (void)gt4_front_grip(); (void)gt4_rear_grip();
+  }
+  return ret;
+}
+
+int digital_to_analog_patched(SceCtrlData *pad){
+  return sceCtrlReadBufferPositivePatched(pad, 1);
+}
+
+int populate_car_digital_control_patched(void *car, SceCtrlData *pad){
+  return digital_to_analog_patched(pad);
+}
+
+int populate_car_analog_control_patched(void *car, SceCtrlData *pad){
+  return digital_to_analog_patched(pad);
+}
+
+// ===== MODULE =====
+int module_start(SceSize args, void *argp){
+  gt4_reset_all();
+  pspDebugScreenInit();
+  return 0;
+}
+
+int module_stop(SceSize args, void *argp){
+  return 0;
+}
