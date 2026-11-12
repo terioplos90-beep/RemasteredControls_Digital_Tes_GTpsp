@@ -198,22 +198,28 @@ buf[len] = '\0';
 
 if(strncmp(buf, "X=1", 3) == 0){
     udp_x_pressed = 1;
+    LOG("UDP BTN X=1");
 }else if(strncmp(buf, "X=0", 3) == 0){
     udp_x_pressed = 0;
+    LOG("UDP BTN X=0");
 }else if(strncmp(buf, "SQUARE=1", 8) == 0){
     udp_square_pressed = 1;
+    LOG("UDP BTN SQUARE=1");
 }else if(strncmp(buf, "SQUARE=0", 8) == 0){
     udp_square_pressed = 0;
-}else if(strncmp(buf, "CAM_LEFT=1", 10) == 0 || strncmp(buf, "BUTTON6=1", 9) == 0 || strncmp(buf, "CAM=LEFT", 8) == 0){
+    LOG("UDP BTN SQUARE=0");
+}else if(strncmp(buf, "CAM_LEFT=1", 10) == 0 || strncmp(buf, "BUTTON6=1", 9) == 0 || strncmp(buf, "CAM=LEFT", 8) == 0 || strncmp(buf, "B6=1", 4) == 0 || strncmp(buf, "6=1", 3) == 0){
     udp_cam_left = 1;
-}else if(strncmp(buf, "CAM_LEFT=0", 10) == 0 || strncmp(buf, "BUTTON6=0", 9) == 0 || strncmp(buf, "CAM=0", 5) == 0 || strncmp(buf, "CAM=NONE", 8) == 0){
+    LOG("UDP BTN CAM_LEFT=1 buf=%s", buf);
+}else if(strncmp(buf, "CAM_LEFT=0", 10) == 0 || strncmp(buf, "BUTTON6=0", 9) == 0 || strncmp(buf, "CAM=0", 5) == 0 || strncmp(buf, "CAM=NONE", 8) == 0 || strncmp(buf, "B6=0", 4) == 0 || strncmp(buf, "6=0", 3) == 0){
     udp_cam_left = 0;
+    LOG("UDP BTN CAM_LEFT=0 buf=%s", buf);
 }else{
     udp_steering_value = parse_udp_steering(buf);
     udp_packet_valid = 1;
     udp_packet_age = 0;
 }
-if(packet_log_count < 30){  
+if(packet_log_count < 5){  
     LOG("UDP PACKET RECEIVED: %s", buf);  
     LOG("UDP STEERING VALUE: %d CAM_LEFT: %d", udp_steering_value, udp_cam_left);  
     packet_log_count++;  
@@ -618,7 +624,13 @@ if(override_brake || udp_square_pressed){
         brake_override, *brake);
 }
 
-*camera_rotation = -1.0f;
+if(udp_cam_left){
+*camera_rotation = -2.5f;
+}else if(override_camera){
+*camera_rotation = camera_override;
+}else{
+*camera_rotation = 0.0f;
+}
 
 pspSdkSetK1(k1);
 
