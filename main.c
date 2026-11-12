@@ -63,6 +63,7 @@ static int adjacent_axes = 0;
 
 // UDP steering input for PPSSPP.
 // Redmi sender sends: S=... X=... SQ=... dalam 1 paket
+// TAPI juga bisa kirim terpisah: "S=14" , "X=1" , "SQUARE=1"
 #define UDP_STEERING_PORT 5557
 #define UDP_BUF_SIZE 128
 #define UDP_TIMEOUT_FRAMES 20
@@ -78,13 +79,12 @@ static int udp_socket = -1;
 int _atoi(char *buf);
 
 static int parse_udp_steering(char *buf){
-    // BACA X & SQUARE DULUAN, SEBELUM CEK S=
-    // Biar paket "X=1" doang tetep kebaca
+    // FIX 1: Baca X dan SQ/SQUARE DULUAN, sebelum cek S=
+    // Biar paket "X=1" doang tetep kebaca, ga kebuang
     char *x_pos = strstr(buf, "X=");
     if(x_pos != NULL){
         udp_x_pressed = (x_pos[2] == '1') ? 1 : 0;
     }
-    // HP 2 lu ngirim SQUARE= , bukan SQ=
     char *sq_pos = strstr(buf, "SQ=");
     if(sq_pos != NULL){
         udp_square_pressed = (sq_pos[3] == '1') ? 1 : 0;
@@ -95,7 +95,8 @@ static int parse_udp_steering(char *buf){
         }
     }
 
-    // Baru baca S=, kalo ga ada, pertahanin setir lama
+    // Baru baca S=, kalo ga ada S=, pertahanin setir lama
+    // tapi X yang udah dibaca di atas JANGAN dibuang
     char *s_pos = strstr(buf, "S=");
     if(s_pos == NULL){
         return udp_steering_value;
@@ -104,17 +105,26 @@ static int parse_udp_steering(char *buf){
     char *p = s_pos + 2;
     int sign = 1;
     int value = 0;
-    if(*p == '-'){ sign = -1; p++; }
+
+    if(*p == '-'){
+        sign = -1;
+        p++;
+    }
+
     if(*p < '0' || *p > '9'){
         return udp_steering_value;
     }
+
     while(*p >= '0' && *p <= '9'){
         value = value * 10 + (*p - '0');
         p++;
     }
+
     value *= sign;
+
     if(value > 127) value = 127;
     if(value < -127) value = -127;
+
     return value;
 }
 
@@ -153,25 +163,19 @@ static int udp_steering_thread(SceSize args, void *argp){
         int len = sceNetInetRecvfrom(udp_socket, buf, UDP_BUF_SIZE - 1, 0,
             (struct sockaddr *)&addr, (socklen_t *)&fromlen);
         if(len > 0){
-            static int packet_log_count = 0;
-
             if(len >= UDP_BUF_SIZE){
                 len = UDP_BUF_SIZE - 1;
             }
 
             buf[len] = '\0';
 
-            // Satu paket ngandung semua: S + X + SQ
-            // Contoh: "S=14 X=1 SQ=0" atau "S=14,X=1,SQ=0"
             udp_steering_value = parse_udp_steering(buf);
             udp_packet_valid = 1;
             udp_packet_age = 0;
 
-            if(packet_log_count < 20){
-                LOG("UDP PACKET RECEIVED: %s", buf);
-                LOG("UDP STEERING VALUE: %d X: %d SQ: %d", udp_steering_value, udp_x_pressed, udp_square_pressed);
-                packet_log_count++;
-            }
+            // Log semua paket X biar keliatan, bukan cuma 20 pertama
+            // Hapus kalo udah beres, biar log ga penuh
+            LOG("UDP PACKET: %s | S=%d X=%d SQ=%d", buf, udp_steering_value, udp_x_pressed, udp_square_pressed);
         }
     }
 
@@ -349,6 +353,24 @@ static void sample_input(SceCtrlData *pad_data, int count, int negative){
     LOG_VERBOSE("timestamp: %lu lx: %d ly: %d rx: %d ry: %d", timestamp, lx, ly, rx, ry);
 }
 
+// FIX 2: Patch Peek juga, karena menu GTPSP pake Peek, bukan Read
+static int (*sceCtrlPeekBufferPositiveOrig)(SceCtrlData *pad_data, int count);
+int sceCtrlPeekBufferPositivePatched(SceCtrlData *pad_data, int count){
+    int k1 = pspSdkSetK1(0);
+    int res = sceCtrlPeekBufferPositiveOrig(pad_data, count);
+    // FIX 3: Loop semua buffer, bukan cuma [0]
+    for(int i = 0; i < res; i++){
+        if(udp_x_pressed){
+            pad_data[i].Buttons |= PSP_CTRL_CROSS;
+        }
+        if(udp_square_pressed){
+            pad_data[i].Buttons |= PSP_CTRL_SQUARE;
+        }
+    }
+    pspSdkSetK1(k1);
+    return res;
+}
+
 static int (*sceCtrlReadBufferPositiveOrig)(SceCtrlData *pad_data, int count);
 int sceCtrlReadBufferPositivePatched(SceCtrlData *pad_data, int count){
     int k1 = pspSdkSetK1(0);
@@ -356,13 +378,16 @@ int sceCtrlReadBufferPositivePatched(SceCtrlData *pad_data, int count){
 
     sample_input(pad_data, res, 0);
 
-    // X ASLI + KOTAK ASLI dari sender, buat menu
+    // X ASLI + KOTAK ASLI dari sender, buat menu / konfirmasi
     // Cuma nambahin, ga ngapus tombol dari HP lu
-    if(udp_x_pressed){
-        pad_data[0].Buttons |= PSP_CTRL_CROSS;
-    }
-    if(udp_square_pressed){
-        pad_data[0].Buttons |= PSP_CTRL_SQUARE;
+    // FIX 3: Loop semua buffer
+    for(int i = 0; i < res; i++){
+        if(udp_x_pressed){
+            pad_data[i].Buttons |= PSP_CTRL_CROSS;
+        }
+        if(udp_square_pressed){
+            pad_data[i].Buttons |= PSP_CTRL_SQUARE;
+        }
     }
 
     pspSdkSetK1(k1);
@@ -487,6 +512,7 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
         *steering = 0;
     }
 
+    // Gas dari X HP 2 ATAU dari analog kanan
     if(override_accel || udp_x_pressed){
         param_3[0] |= 2;
 
@@ -532,6 +558,7 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
             accel_override, *throttle);
     }
 
+    // Rem dari SQUARE HP 2 ATAU dari analog kanan
     if(override_brake || udp_square_pressed){
         param_3[0] |= 4;
 
@@ -672,8 +699,10 @@ int init(){
 
     HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
 
-    // Hidupin lagi biar X dari sender bisa buat menu
+    // Hidupin lagi biar X dari sender bisa buat menu / konfirmasi
     HIJACK_SYSCALL_STUB((u32)sceCtrlReadBufferPositive, sceCtrlReadBufferPositivePatched, sceCtrlReadBufferPositiveOrig);
+    // FIX: Menu GTPSP pake Peek, harus di-hijack juga
+    HIJACK_SYSCALL_STUB((u32)sceCtrlPeekBufferPositive, sceCtrlPeekBufferPositivePatched, sceCtrlPeekBufferPositiveOrig);
 
     if(is_emulator){
         sceKernelDelayThread(1000 * 1000 * 5);
