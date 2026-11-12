@@ -144,7 +144,9 @@ static int gt4_hud_thread(SceSize args, void *argp) {
         sceKernelDelayThread(2000);
     }
     return 0;
-}static void gt4_update(float steering_norm, float throttle_norm, float brake_norm, float dt) {
+}
+
+static void gt4_update(float steering_norm, float throttle_norm, float brake_norm, float dt) {
     if (!gt4_initialized) gt4_reset_all();
     gt4_counter++;
     float target = throttle_norm * 280.0f;
@@ -320,15 +322,22 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
     float *camera_rotation = (float *)(&param_3[0x2c]);
     short *throttle = (short *)(&param_3[0x8]);
     short *brake = (short *)(&param_3[0xA]);
-    param_3[0] = 0; param_3[1] = 0;
+    // JANGAN di-nol-in dulu, biar nilai asli dari game (tilt) tetap ada
+    // param_3[0] = 0; param_3[1] = 0; -> dihapus, ini yang bunuh tilt
+    short steering_asli_dari_game = *steering;
     int k1 = pspSdkSetK1(0);
     int mode;
     sceCtrlGetSamplingMode(&mode);
-    if (mode != PSP_CTRL_MODE_ANALOG) { sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG); return; }
+    if (mode != PSP_CTRL_MODE_ANALOG) { sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG); pspSdkSetK1(k1); return; }
     float steer_norm2 = (float)steering_override / 127.0f;
     float thr_norm2 = override_accel ? (float)accel_override / 127.0f : 0.0f;
     float brk_norm2 = override_brake ? (float)brake_override / 127.0f : 0.0f;
-    if (!override_steering) steer_norm2 = 0.0f;
+    // Kalau gak ada override setir, pakai setir asli dari game (ini tilt-nya)
+    if (!override_steering) {
+        steer_norm2 = (float)steering_asli_dari_game / 8192.0f;
+        if (steer_norm2 > 1.0f) steer_norm2 = 1.0f;
+        if (steer_norm2 < -1.0f) steer_norm2 = -1.0f;
+    }
     gt4_update(steer_norm2, thr_norm2, brk_norm2, 1.0f / 60.0f);
     float grip_f = gt4_front_grip();
     float grip_r = gt4_rear_grip();
@@ -349,7 +358,16 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
         if (steer_final < -127.0f) steer_final = -127.0f;
         *steering = (short)(steer_final * 0x2000 / 127);
     } else {
-        *steering = 0;
+        // FIX TILT: jangan di-nol-in, biarin setir asli dari game jalan
+        // *steering tetap = steering_asli_dari_game
+        // Cuma kasih efek grip kalau ban udah aus
+        if (grip_f < 0.90f || grip_r < 0.80f) {
+            float s = (float)steering_asli_dari_game;
+            if (grip_f < 0.90f) s *= (0.60f + grip_f * 0.40f);
+            *steering = (short)s;
+        } else {
+            *steering = steering_asli_dari_game;
+        }
     }
     if (override_accel) {
         param_3[0] = param_3[0] | 2;
@@ -419,6 +437,8 @@ int init() {
     gt4_reset_all();
     
     HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
+    // FIX 1: INI YANG KEMARIN KELUPAAN - sambungin pembaca tilt/stick
+    HIJACK_FUNCTION(sceCtrlReadBufferPositive, sceCtrlReadBufferPositivePatched, sceCtrlReadBufferPositiveOrig);
     
     LOG("GT4 INIT OK - HOOKED ANALOG ONLY");
     if (is_emulator) { sceKernelDelayThread(1000 * 1000 * 5); sceCtrlSetSamplingCycle(5555); }
