@@ -78,40 +78,13 @@ static int udp_socket = -1;
 int _atoi(char *buf);
 
 static int parse_udp_steering(char *buf){
-    // Cari S= di mana aja, bukan harus di awal
-    char *s_pos = strstr(buf, "S=");
-    if(s_pos == NULL){
-        return udp_steering_value;
-    }
-
-    char *p = s_pos + 2;
-    int sign = 1;
-    int value = 0;
-
-    if(*p == '-'){
-        sign = -1;
-        p++;
-    }
-
-    if(*p < '0' || *p > '9'){
-        return 0;
-    }
-
-    while(*p >= '0' && *p <= '9'){
-        value = value * 10 + (*p - '0');
-        p++;
-    }
-
-    value *= sign;
-
-    if(value > 127) value = 127;
-    if(value < -127) value = -127;
-
-    // Baca X dan SQ dari paket yang SAMA
+    // BACA X & SQUARE DULUAN, SEBELUM CEK S=
+    // Biar paket "X=1" doang tetep kebaca
     char *x_pos = strstr(buf, "X=");
     if(x_pos != NULL){
         udp_x_pressed = (x_pos[2] == '1') ? 1 : 0;
     }
+    // HP 2 lu ngirim SQUARE= , bukan SQ=
     char *sq_pos = strstr(buf, "SQ=");
     if(sq_pos != NULL){
         udp_square_pressed = (sq_pos[3] == '1') ? 1 : 0;
@@ -122,6 +95,26 @@ static int parse_udp_steering(char *buf){
         }
     }
 
+    // Baru baca S=, kalo ga ada, pertahanin setir lama
+    char *s_pos = strstr(buf, "S=");
+    if(s_pos == NULL){
+        return udp_steering_value;
+    }
+
+    char *p = s_pos + 2;
+    int sign = 1;
+    int value = 0;
+    if(*p == '-'){ sign = -1; p++; }
+    if(*p < '0' || *p > '9'){
+        return udp_steering_value;
+    }
+    while(*p >= '0' && *p <= '9'){
+        value = value * 10 + (*p - '0');
+        p++;
+    }
+    value *= sign;
+    if(value > 127) value = 127;
+    if(value < -127) value = -127;
     return value;
 }
 
