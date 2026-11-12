@@ -54,7 +54,7 @@ static int override_steering = 0;
 static short int steering_override = 0;
 static int override_camera = 0;
 static float camera_override = 0;
-
+static int bonnet_camera = 1;
 static unsigned char outer_deadzone = 114;
 static unsigned char inner_deadzone = 2;
 
@@ -617,10 +617,14 @@ if(override_brake || udp_square_pressed){
 
 	LOG_VERBOSE("applying brake, val is %d, brake is %d",
         brake_override, *brake);
-}
-
-if(override_camera){
-*camera_rotation = camera_override;
+}// ROOF -> BONNET
+if(bonnet_camera){
+    *camera_rotation = 0.0f;
+    float *camera_y = (float *)(&param_3[0x30]);
+    *camera_y = 0.85f;
+    param_3[0] |= 0x10;
+else if(override_camera){
+    *camera_rotation = camera_override;
 }
 
 pspSdkSetK1(k1);
