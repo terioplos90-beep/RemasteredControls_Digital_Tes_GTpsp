@@ -80,3 +80,28 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
     w *= beban[i];
     if(slip > 0.2f) w *= (1.0f + slip * 0.5f);
     if(t->
+    if(t->is_flat) continue;
+    float heat = (speed/300.0f)*7.0f*dt + slip*22.0f*dt;
+    if(is_front[i]) heat *= 1.35f;
+    t->temp += heat - (2.8f*dt);
+    t->temp = gt4_clampf(t->temp, 20, 160);
+    float w = (jarak_meter / (GT4_BAN_HABIS_KM * 1000.0f)) * 100.0f;
+    w *= beban[i];
+    if(slip > 0.2f) w *= (1.0f + slip * 0.5f);
+    if(t->temp > 130) w *= 1.5f;
+    if(is_front[i]) w *= 1.05f; else w *= 1.15f;
+    t->wear += w;
+    t->wear = gt4_clampf(t->wear, 0, 100);
+    t->grip = gt4_calc_grip(t);
+  }
+  if(is_braking_hard){ tireFL.wear += 0.02f; tireFR.wear += 0.02f; }
+  if(is_drifting){ tireRL.wear += 0.03f; tireRR.wear += 0.03f; }
+  if(is_wheelspin){ tireRL.wear += 0.02f; tireRR.wear += 0.02f; }
+  tireFL.wear = gt4_clampf(tireFL.wear,0,100);
+  tireFR.wear = gt4_clampf(tireFR.wear,0,100);
+  tireRL.wear = gt4_clampf(tireRL.wear,0,100);
+  tireRR.wear = gt4_clampf(tireRR.wear,0,100);
+  last_steer_gt4 = steering_norm;
+}
+static float gt4_front_grip(){ return (tireFL.grip + tireFR.grip) / 2.0f; }
+static float gt4_rear_grip(){ return (tireRL.grip + tireRR.grip) / 2.0f; }
