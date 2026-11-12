@@ -623,7 +623,7 @@ if(bonnet_camera){
     float *camera_y = (float *)(&param_3[0x30]);
     *camera_y = 0.85f;
     param_3[0] |= 0x10;
-else if(override_camera){
+}else if(override_camera){
     *camera_rotation = camera_override;
 }
 
