@@ -70,16 +70,7 @@ static void gt4_update(float steering_norm, float throttle_norm, float brake_nor
     TireGT4 *t = list[i];
     if(t->is_flat) continue;
     // Suhu naik dari slip + kecepatan, turun karena pendinginan
-    float heat = (speed/300.0f)*7.0f*dt + slip*22.0f*dt;
-    if(is_front[i]) heat *= 1.35f;
-    t->temp += heat - (2.8f*dt);
-    t->temp = gt4_clampf(t->temp, 20, 160);
-
-    // Wear: base dari jarak + slip + drift + rem
-    float w = (jarak_meter / (GT4_BAN_HABIS_KM * 1000.0f)) * 100.0f;
-    w *= beban[i];
-    if(slip > 0.2f) w *= (1.0f + slip * 0.5f);
-    if(t->
+    
     if(t->is_flat) continue;
     float heat = (speed/300.0f)*7.0f*dt + slip*22.0f*dt;
     if(is_front[i]) heat *= 1.35f;
