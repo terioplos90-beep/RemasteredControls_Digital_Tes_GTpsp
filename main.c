@@ -58,7 +58,7 @@ static float camera_override = 0;
 static unsigned char outer_deadzone = 114;
 static unsigned char inner_deadzone = 2;
 
-static int camera_controls = 0;
+static int camera_controls = 1;
 static int adjacent_axes = 0;
 
 // UDP steering input for PPSSPP.
@@ -71,6 +71,7 @@ static volatile int udp_steering_value = 0;
 static volatile int udp_packet_valid = 0;
 static volatile int udp_x_pressed = 0;
 static volatile int udp_square_pressed = 0;
+static volatile int udp_cam_left = 0;
 static volatile int udp_packet_age = UDP_TIMEOUT_FRAMES + 1;
 static SceUID udp_thread_id = -1;
 static int udp_socket = -1;
@@ -203,16 +204,19 @@ if(strncmp(buf, "X=1", 3) == 0){
     udp_square_pressed = 1;
 }else if(strncmp(buf, "SQUARE=0", 8) == 0){
     udp_square_pressed = 0;
+}else if(strncmp(buf, "CAM_LEFT=1", 10) == 0 || strncmp(buf, "BUTTON6=1", 9) == 0 || strncmp(buf, "CAM=LEFT", 8) == 0){
+    udp_cam_left = 1;
+}else if(strncmp(buf, "CAM_LEFT=0", 10) == 0 || strncmp(buf, "BUTTON6=0", 9) == 0 || strncmp(buf, "CAM=0", 5) == 0 || strncmp(buf, "CAM=NONE", 8) == 0){
+    udp_cam_left = 0;
 }else{
     udp_steering_value = parse_udp_steering(buf);
     udp_packet_valid = 1;
     udp_packet_age = 0;
 }
-if(packet_log_count < 10){  
+if(packet_log_count < 30){  
     LOG("UDP PACKET RECEIVED: %s", buf);  
-    LOG("UDP STEERING VALUE: %d", udp_steering_value);  
+    LOG("UDP STEERING VALUE: %d CAM_LEFT: %d", udp_steering_value, udp_cam_left);  
     packet_log_count++;  
-  
 }		}
 
 }
@@ -614,9 +618,7 @@ if(override_brake || udp_square_pressed){
         brake_override, *brake);
 }
 
-if(override_camera){
-*camera_rotation = camera_override;
-}
+*camera_rotation = -1.0f;
 
 pspSdkSetK1(k1);
 
@@ -657,7 +659,8 @@ LOG("cannot open %s for reading, trying ef0:/", path);
 path = "ef0:/PSP/"MODULE_NAME"_settings.txt";
 fd = sceIoOpen(path, PSP_O_RDONLY, 0);
 if(fd < 0){
-LOG("cannot open %s for reading either", path);
+LOG("cannot open %s for reading either, using default camera ON", path);
+camera_controls = 1;
 return;
 }
 }
