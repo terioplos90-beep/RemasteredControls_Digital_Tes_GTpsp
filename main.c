@@ -169,7 +169,19 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 {
     populate_car_analog_control_orig(param_1, param_2, param_3, param_4, param_5, param_6);
 }
+// Dummy biar exports.exp lama tetap ke-link, ga kepake buat menu
+void digital_to_analog_patched(u32 *param_1, u32 *param_2)
+{
+    (void)param_1;
+    (void)param_2;
+}
 
+void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u32 param_3)
+{
+    (void)param_1;
+    (void)param_2;
+    (void)param_3;
+}
 // ============ INIT ============
 int init()
 {
