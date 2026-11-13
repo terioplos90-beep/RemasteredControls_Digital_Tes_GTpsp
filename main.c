@@ -105,7 +105,7 @@ static int udp_thread(SceSize args, void *argp)
     addr.sin_port = 0xB515; // 5557 dalam network order, biar ga perlu htons
     addr.sin_addr.s_addr = 0; // INADDR_ANY
 
-    if (sceNetInetBind(sock, (struct SceNetSockaddr *)&addr, sizeof(addr)) < 0) {
+    if (sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         LOG("UDP bind fail");
         sceKernelExitDeleteThread(0);
         return 0;
