@@ -115,6 +115,8 @@ int set_offsets(char *disc_id, char *disc_version)
 {
     LOG("game_base_addr: 0x%lx", game_base_addr);
     if (strcmp("2.00", disc_version) == 0 && (strcmp("UCES01245", disc_id) == 0 || strcmp("UCUS98632", disc_id) == 0)) {
+        offset_digital_to_analog = game_base_addr + 0x14eb40;
+        offset_populate_car_digital_control = game_base_addr + 0x126b50;
         offset_populate_car_analog_control = game_base_addr + 0x126dec;
         return 0;
     }
@@ -122,7 +124,31 @@ int set_offsets(char *disc_id, char *disc_version)
     return -1;
 }
 
-// ================= HIJACK =================
+// ================= STUB WAJIB BUAT exports.exp =================
+// Jangan dihapus, kalo dihapus linker error lagi
+static int (*sceCtrlReadBufferPositiveOrig)(SceCtrlData *pad_data, int count);
+int sceCtrlReadBufferPositivePatched(SceCtrlData *pad_data, int count)
+{
+    return sceCtrlReadBufferPositiveOrig(pad_data, count);
+}
+
+static void (*digital_to_analog_orig)(u32 *param_1, u32 *param_2);
+void digital_to_analog_patched(u32 *param_1, u32 *param_2)
+{
+    if (digital_to_analog_orig) {
+        digital_to_analog_orig(param_1, param_2);
+    }
+}
+
+static void (*populate_car_digital_control_orig)(unsigned char *param_1, u32 param_2, u32 param_3);
+void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u32 param_3)
+{
+    if (populate_car_digital_control_orig) {
+        populate_car_digital_control_orig(param_1, param_2, param_3);
+    }
+}
+
+// ================= HIJACK UTAMA =================
 static void (*populate_car_analog_control_orig)(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6);
 void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6)
 {
