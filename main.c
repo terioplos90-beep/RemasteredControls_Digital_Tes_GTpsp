@@ -1,55 +1,45 @@
-/*
-  FULL BUILD - FIX PPSSPP IMPORT PATCH - Menu + Balapan
-*/
-#include <pspctrl.h>
 #include <pspkernel.h>
-#include <pspdebug.h>
-#include <pspdisplay.h>
-#include <string.h>
-#include <pspsdk.h>
-#include <pspiofilemgr.h>
+#include <pspctrl.h>
 #include <pspnet.h>
 #include <pspnet_inet.h>
-#include <psputility.h>
-#include <pspmodulemgr.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <systemctrl.h>
-#include "hooking.h"
-#include "disc_ident.h"
-#include "logging.h"
-#include "common.h"
+#include <pspsdk.h>
+#include <string.h>
+#include <stdio.h>
 
-#define GAME_MODULE_NAME "PDIAPP"
-#define MODULE_NAME "GTRemastered"
+PSP_MODULE_INFO("PDIAPP_PAD", 0x1000, 1, 0);
+PSP_MAIN_THREAD_ATTR(0);
 
-PSP_MODULE_INFO(MODULE_NAME, PSP_MODULE_KERNEL, 1, 0);
+// ============ LOG ============
+#define LOG(...) do { \
+    char _buf[256]; \
+    snprintf(_buf, sizeof(_buf), __VA_ARGS__); \
+    pspDebugScreenPrintf("%s\n", _buf); \
+} while(0)
 
-#define EMULATOR_DEVCTL__IS_EMULATOR 0x00000003
-#ifndef IRSHELL
-static STMOD_HANDLER previous;
-#endif
-static int is_emulator;
-static u32 game_base_addr = 0;
+// ============ GLOBAL STATE ============
+// Diubah dari UDP / HP
+static volatile int btn_x_state = 0;
+static volatile int btn_square_state = 0;
+static volatile int steer_val = 0; // -127 sampai 127, 0 = tengah
 
-static volatile int btn_x = 0;
-static volatile int btn_square = 0;
-static volatile int steer_val = 0;
+// Original function pointers
+typedef int (*SceCtrlReadFunc)(SceCtrlData *pad_data, int count);
+static SceCtrlReadFunc sceCtrlReadBufferPositiveOrig = NULL;
+static SceCtrlReadFunc sceCtrlPeekBufferPositiveOrig = NULL;
 
-static int (*sceCtrlReadBufferPositiveOrig)(SceCtrlData *pad_data, int count);
-static int (*sceCtrlPeekBufferPositiveOrig)(SceCtrlData *pad_data, int count);
-
+// ============ APPLY PATCH KE PAD ============
 static void apply_patch_to_pad(SceCtrlData *pad_data, int count)
 {
     int i;
-    if (count <= 0) return;
+    if (!pad_data || count <= 0) return;
+
     for (i = 0; i < count; i++) {
-        if (btn_x) pad_data[i].Buttons |= PSP_CTRL_CROSS;
-        else pad_data[i].Buttons &= ~PSP_CTRL_CROSS;
-        if (btn_square) pad_data[i].Buttons |= PSP_CTRL_SQUARE;
-        else pad_data[i].Buttons &= ~PSP_CTRL_SQUARE;
-        {
+        // Tombol: OR, jangan overwrite!
+        if (btn_x_state) pad_data[i].Buttons |= PSP_CTRL_CROSS;
+        if (btn_square_state) pad_data[i].Buttons |= PSP_CTRL_SQUARE;
+
+        // Analog: cuma diubah kalau lagi belok, biar menu gak ke-lock
+        if (steer_val != 0) {
             int s = steer_val;
             if (s > 127) s = 127;
             if (s < -127) s = -127;
@@ -59,6 +49,7 @@ static void apply_patch_to_pad(SceCtrlData *pad_data, int count)
     }
 }
 
+// ============ PATCHED FUNCTIONS ============
 int sceCtrlReadBufferPositivePatched(SceCtrlData *pad_data, int count)
 {
     int ret;
@@ -79,226 +70,135 @@ int sceCtrlPeekBufferPositivePatched(SceCtrlData *pad_data, int count)
     return ret;
 }
 
+// ============ PATCH IMPORTS SEMUA MODUL ============
+static void patch_one_module_imports(SceModule *mod)
+{
+    u32 *stub, *end;
+    if (!mod) return;
+
+    stub = (u32*)mod->stub_top;
+    end = (u32*)(mod->stub_top + mod->stub_size);
+
+    for (; stub < end; ) {
+        u32 len_v = stub[2];
+        u16 stubcount = (u16)((len_v >> 16) & 0xFFFF);
+        u16 slen = (u16)(len_v & 0xFFFF);
+        u32 nidtable = stub[3];
+        u32 stubtable = stub[4];
+        u32 *nids = (u32*)nidtable;
+        u32 *stubs = (u32*)stubtable;
+        int j;
+
+        for (j = 0; j < stubcount; j++) {
+            if (nids[j] == 0x1F803938) { // sceCtrlReadBufferPositive
+                if (!sceCtrlReadBufferPositiveOrig)
+                    sceCtrlReadBufferPositiveOrig = (SceCtrlReadFunc)stubs[j];
+                stubs[j] = (u32)sceCtrlReadBufferPositivePatched;
+                LOG("PATCHED Read in %s", mod->modname);
+            }
+            if (nids[j] == 0x3A622550) { // sceCtrlPeekBufferPositive
+                if (!sceCtrlPeekBufferPositiveOrig)
+                    sceCtrlPeekBufferPositiveOrig = (SceCtrlReadFunc)stubs[j];
+                stubs[j] = (u32)sceCtrlPeekBufferPositivePatched;
+                LOG("PATCHED Peek in %s", mod->modname);
+            }
+        }
+
+        stub += 5;
+        if (slen > 5) stub += (slen - 5);
+    }
+}
+
+static void patch_pdiapp_imports()
+{
+    SceUID ids[64];
+    int count = 0;
+    int i;
+
+    if (sceKernelGetModuleList(0, 64, ids, &count) == 0) {
+        for (i = 0; i < count; i++) {
+            SceModule *mod = (SceModule*)sceKernelFindModuleByUID(ids[i]);
+            if (mod) patch_one_module_imports(mod);
+        }
+    } else {
+        SceModule *mod = (SceModule*)sceKernelFindModuleByName("PDIAPP");
+        patch_one_module_imports(mod);
+    }
+
+    if (!sceCtrlReadBufferPositiveOrig) LOG("FAIL IMPORT Read - not found");
+    if (!sceCtrlPeekBufferPositiveOrig) LOG("FAIL IMPORT Peek - not found");
+}
+
+// ============ UDP THREAD ============
+// Protokol dari HP, kirim string gini:
+// "X:1" = X ON, "X:0" = X OFF
+// "S:1" = SQUARE ON, "S:0" = SQUARE OFF
+// "ST:-50" = setir ke -50
 static int udp_thread(SceSize args, void *argp)
 {
     int sock;
     struct sockaddr_in addr;
     char buf[128];
+
     LOG("UDP THREAD START");
     sock = sceNetInetSocket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) { sceKernelExitDeleteThread(0); return 0; }
+
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = 0xB515;
+    addr.sin_port = 0xB515; // Port 55555, byte swap: 0xB515
     addr.sin_addr.s_addr = 0;
-    if (sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { sceKernelExitDeleteThread(0); return 0; }
-    LOG("N 5557");
+
+    if (sceNetInetBind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        LOG("UDP BIND FAIL");
+        sceKernelExitDeleteThread(0);
+        return 0;
+    }
+
+    LOG("UDP LISTEN 55555");
+
     while (1) {
         int len = sceNetInetRecv(sock, buf, sizeof(buf) - 1, 0);
-        if (len <= 0) continue;
-        buf[len] = 0;
-        if (buf[0] == 'S' && buf[1] == '=') {
-            int v = 0; int neg = 0; int i = 2;
-            if (buf[i] == '-') { neg = 1; i++; }
-            while (buf[i] >= '0' && buf[i] <= '9') { v = v * 10 + (buf[i] - '0'); i++; }
-            if (neg) v = -v;
-            steer_val = v;
+        if (len > 0) {
+            buf[len] = 0;
+            // X
+            if (strncmp(buf, "X:1", 3) == 0) { btn_x_state = 1; LOG("BTN X = ON"); }
+            else if (strncmp(buf, "X:0", 3) == 0) { btn_x_state = 0; LOG("BTN X = OFF"); }
+            // SQUARE
+            else if (strncmp(buf, "S:1", 3) == 0) { btn_square_state = 1; LOG("BTN SQUARE = ON"); }
+            else if (strncmp(buf, "S:0", 3) == 0) { btn_square_state = 0; LOG("BTN SQUARE = OFF"); }
+            // STEER
+            else if (strncmp(buf, "ST:", 3) == 0) {
+                int v = 0;
+                sscanf(buf + 3, "%d", &v);
+                steer_val = v;
+            }
         }
-        else if (buf[0] == 'X' && buf[1] == '=') {
-            btn_x = (buf[2] == '1') ? 1 : 0;
-            LOG("BTN X = %s", btn_x ? "ON" : "OFF");
-        }
-        else if (buf[0] == 'S' && buf[1] == 'Q') {
-            int v = 0; int i = 0;
-            while (buf[i] && buf[i] != '=') i++;
-            if (buf[i] == '=') { i++; v = (buf[i] == '1') ? 1 : 0; }
-            btn_square = v;
-            LOG("BTN SQUARE = %s", btn_square ? "ON" : "OFF");
-        }
+        sceKernelDelayThread(1000);
     }
     return 0;
 }
 
-// ===== PATCH IMPORT PDIAPP - CARA PPSSPP =====
-// Kita cari tabel import PDIAPP, kalau NID-nya ketemu, kita timpa
-// pointer fungsinya ke fungsi patch kita, dan simpan yang ori.
-static void patch_pdiapp_imports()
+// ============ MAIN ============
+int module_start(SceSize args, void *argp)
 {
-    SceModule *mod = (SceModule*)sceKernelFindModuleByName("PDIAPP");
-    if (!mod) { LOG("FAIL find PDIAPP module"); return; }
-    LOG("PDIAPP mod stub_top=0x%08lx stub_size=0x%08lx", (unsigned long)mod->stub_top, (unsigned long)mod->stub_size);
-
-    {
-        u32 *stub = (u32*)mod->stub_top;
-        u32 *end = (u32*)(mod->stub_top + mod->stub_size);
-        for (; stub < end; ) {
-            // Struct SceLibraryStubTable: libname, version+attr, len_v, nidtable, stubtable
-            u32 libname_addr = stub[0];
-            u16 len = (u16)((stub[1] >> 16) & 0xFFFF);
-            // stub[1] = version(lo) + attr(hi) - ga dipake
-            // Layout 32-bit: [0]=libname, [1]=version/attr, [2]=len_v, [3]=nidtable, [4]=stubtable
-            u32 len_v = stub[2];
-            u16 slen = (u16)(len_v & 0xFFFF);
-            u16 stubcount = (u16)((len_v >> 16) & 0xFFFF);
-            u32 nidtable = stub[3];
-            u32 stubtable = stub[4];
-            (void)libname_addr; (void)len;
-
-            LOG("stub lib @0x%08lx count=%d nid=0x%08lx stub=0x%08lx slen=%d", (unsigned long)stub, stubcount, (unsigned long)nidtable, (unsigned long)stubtable, slen);
-
-            {
-                u32 *nids = (u32*)nidtable;
-                u32 *stubs = (u32*)stubtable;
-                int j;
-                for (j = 0; j < stubcount; j++) {
-                    if (nids[j] == 0x1F803938) { // sceCtrlReadBufferPositive
-                        if (!sceCtrlReadBufferPositiveOrig)
-                            sceCtrlReadBufferPositiveOrig = (void*)stubs[j];
-                        stubs[j] = (u32)sceCtrlReadBufferPositivePatched;
-                        LOG("PATCHED IMPORT Read NID 0x%08lx -> 0x%08lx", (unsigned long)nids[j], (unsigned long)stubs[j]);
-                    }
-                    if (nids[j] == 0x3A622550) { // sceCtrlPeekBufferPositive
-                        if (!sceCtrlPeekBufferPositiveOrig)
-                            sceCtrlPeekBufferPositiveOrig = (void*)stubs[j];
-                        stubs[j] = (u32)sceCtrlPeekBufferPositivePatched;
-                        LOG("PATCHED IMPORT Peek NID 0x%08lx -> 0x%08lx", (unsigned long)nids[j], (unsigned long)stubs[j]);
-                    }
-                }
-            }
-
-            // Pindah ke tabel berikutnya: 5 u32
-            stub += 5;
-            // Kalau slen > 5, lompat sisanya (jarang kepake)
-            if (slen > 5) stub += (slen - 5);
-        }
-    }
-
-    if (!sceCtrlReadBufferPositiveOrig) LOG("FAIL IMPORT Read - not found in PDIAPP");
-    if (!sceCtrlPeekBufferPositiveOrig) LOG("FAIL IMPORT Peek - not found in PDIAPP");
-}
-int set_offsets(char *disc_id, char *disc_version)
-{
-    if (strcmp("2.00", disc_version) == 0 && (strcmp("UCES01245", disc_id) == 0 || strcmp("UCUS98632", disc_id) == 0)) {
-        offset_digital_to_analog = game_base_addr + 0x14eb40;
-        offset_populate_car_digital_control = game_base_addr + 0x126b50;
-        offset_populate_car_analog_control = game_base_addr + 0x126dec;
-        return 0;
-    }
-    return -1;
-}
-
-static void (*populate_car_analog_control_orig)(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6);
-void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6)
-{
-    populate_car_analog_control_orig(param_1, param_2, param_3, param_4, param_5, param_6);
-}
-
-void digital_to_analog_patched(u32 *param_1, u32 *param_2) { (void)param_1; (void)param_2; }
-void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u32 param_3) { (void)param_1; (void)param_2; (void)param_3; }
-
-// ============ INIT ============
-int init()
-{
-    char disc_id[50];
-    char disc_version[50];
     SceUID thid;
-    if (get_disc_id_version(disc_id, disc_version) != 0) { LOG("disc id fail"); return -1; }
-    LOG("disc id is %s", disc_id);
-    LOG("disc version is %s", disc_version);
-    if (set_offsets(disc_id, disc_version) != 0) { LOG("set_offsets fail"); return -1; }
 
-    thid = sceKernelCreateThread("udp_thread", udp_thread, 0x18, 0x10000, 0, NULL);
-    if (thid >= 0) sceKernelStartThread(thid, 0, NULL);
+    pspDebugScreenInit();
+    LOG("module started");
+    LOG("starting in ppsspp mode");
 
-    // PPSSPP: patch import PDIAPP, bukan syscall
+    // Patch dulu biar dari menu udah jalan
     patch_pdiapp_imports();
 
-    HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
-    LOG("hijacking function at 0x%08lx", offset_populate_car_analog_control);
+    thid = sceKernelCreateThread("udp_thread", udp_thread, 0x12, 0x10000, 0, NULL);
+    if (thid >= 0) sceKernelStartThread(thid, 0, NULL);
+
     LOG("INIT OK - X + SQUARE SIAP - MENU + BALAPAN");
     return 0;
 }
 
-#ifndef IRSHELL
-int StartPSP(SceModule2 *mod)
+int module_stop(SceSize args, void *argp)
 {
-    char namebuf[sizeof(mod->modname) + 1] = {0};
-    memcpy(namebuf, mod->modname, sizeof(mod->modname));
-    if (strcmp(namebuf, GAME_MODULE_NAME) == 0) {
-        game_base_addr = mod->text_addr;
-        game_base_addr = game_base_addr + 0x28;
-        init();
-    }
-    if (!previous) return 0;
-    return previous(mod);
-}
-#else
-int irshell_find_module(SceSize args, void *argp)
-{
-    int cycles = 0;
-    while (cycles < 60) {
-        SceUID modules[256] = {0};
-        SceKernelModuleInfo info = {0};
-        int count = 0;
-        if (sceKernelGetModuleIdList(modules, sizeof(modules), &count) >= 0) {
-            int i;
-            for (i = 0; i < count; i++) {
-                info.size = sizeof(SceKernelModuleInfo);
-                if (sceKernelQueryModuleInfo(modules[i], &info) < 0) continue;
-                char namebuf[sizeof(info.name) + 1] = {0};
-                memcpy(namebuf, info.name, sizeof(info.name));
-                if (strcmp(namebuf, GAME_MODULE_NAME) == 0) game_base_addr = info.text_addr + 0x28;
-            }
-            if (game_base_addr != 0) { init(); sceKernelExitDeleteThread(0); return 0; }
-        }
-        sceKernelDelayThread(1000 * 1000);
-        cycles++;
-    }
-    sceKernelExitDeleteThread(0);
     return 0;
 }
-#endif
-
-static void StartPPSSPP()
-{
-    SceUID modules[256];
-    SceKernelModuleInfo info;
-    int i, count = 0;
-    if (sceKernelGetModuleIdList(modules, sizeof(modules), &count) >= 0) {
-        for (i = 0; i < count; ++i) {
-            info.size = sizeof(SceKernelModuleInfo);
-            if (sceKernelQueryModuleInfo(modules[i], &info) < 0) continue;
-            char namebuf[sizeof(info.name) + 1] = {0};
-            memcpy(namebuf, info.name, sizeof(info.name));
-            if (strcmp(namebuf, GAME_MODULE_NAME) == 0) game_base_addr = info.text_addr;
-        }
-        if (game_base_addr != 0) init();
-    }
-}
-
-int module_start(SceSize args, void *argp)
-{
-#if DEBUG_LOG
-    sceIoRemove("ms0:/PSP/GTRemastered.log");
-    sceIoRemove("ef0:/PSP/GTRemastered.log");
-#endif
-    is_emulator = sceIoDevctl("kemulator:", EMULATOR_DEVCTL__IS_EMULATOR, NULL, 0, NULL, 0) == 0;
-    LOG("module started");
-    if (is_emulator) {
-        LOG("starting in ppsspp mode");
-        StartPPSSPP();
-    } else {
-#ifndef IRSHELL
-        previous = sctrlHENSetStartModuleHandler(StartPSP);
-#else
-        {
-            SceUID thid = sceKernelCreateThread("irshell_find_module", irshell_find_module, 0x18, 0x10000, 0, NULL);
-            if (thid < 0) return 0;
-            sceKernelStartThread(thid, 0, NULL);
-        }
-#endif
-    }
-    return 0;
-}
-
-int module_stop(SceSize args, void *argp) { return 0; }
