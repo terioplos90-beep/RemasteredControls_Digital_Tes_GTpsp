@@ -124,7 +124,7 @@ static int udp_thread(SceSize args, void *argp)
 // pointer fungsinya ke fungsi patch kita, dan simpan yang ori.
 static void patch_pdiapp_imports()
 {
-    SceModule *mod = (SceModule*)sceKernelFindModuleByName((char*)GAME_MODULE_NAME);
+    SceModule *mod = (SceModule*)sceKernelFindModuleByName("PDIAPP");
     if (!mod) { LOG("FAIL find PDIAPP module"); return; }
     LOG("PDIAPP mod stub_top=0x%08lx stub_size=0x%08lx", (unsigned long)mod->stub_top, (unsigned long)mod->stub_size);
 
@@ -132,11 +132,11 @@ static void patch_pdiapp_imports()
         u32 *stub = (u32*)mod->stub_top;
         u32 *end = (u32*)(mod->stub_top + mod->stub_size);
         for (; stub < end; ) {
-            // Struct SceLibraryStubTable: libname(4), version(2), attr(2), len(2), vstubcount(2), nidtable(4), stubtable(4), entrytable(4) = 20 byte
+            // Struct SceLibraryStubTable: libname, version+attr, len_v, nidtable, stubtable
             u32 libname_addr = stub[0];
             u16 len = (u16)((stub[1] >> 16) & 0xFFFF);
-            // stub[1] = version(lo) + attr(hi) - kita ambil len dari stub[1] high? pakai cara aman:
-            // Layout 32-bit: [0]=libname, [1]=version|attr, [2]=len|vstubcount, [3]=nidtable, [4]=stubtable
+            // stub[1] = version(lo) + attr(hi) - ga dipake
+            // Layout 32-bit: [0]=libname, [1]=version/attr, [2]=len_v, [3]=nidtable, [4]=stubtable
             u32 len_v = stub[2];
             u16 slen = (u16)(len_v & 0xFFFF);
             u16 stubcount = (u16)((len_v >> 16) & 0xFFFF);
@@ -144,39 +144,38 @@ static void patch_pdiapp_imports()
             u32 stubtable = stub[4];
             (void)libname_addr; (void)len;
 
-            LOG("stub lib @0x%08lx count=%d nid=0x%08lx stubtbl=0x%08lx", (unsigned long)stub, stubcount, (unsigned long)nidtable, (unsigned long)stubtable);
+            LOG("stub lib @0x%08lx count=%d nid=0x%08lx stub=0x%08lx slen=%d", (unsigned long)stub, stubcount, (unsigned long)nidtable, (unsigned long)stubtable, slen);
 
             {
-                int j;
                 u32 *nids = (u32*)nidtable;
                 u32 *stubs = (u32*)stubtable;
+                int j;
                 for (j = 0; j < stubcount; j++) {
-                    if (nids[j] == 0x1F803938) { // Read
-                        if (!sceCtrlReadBufferPositiveOrig) {
+                    if (nids[j] == 0x1F803938) { // sceCtrlReadBufferPositive
+                        if (!sceCtrlReadBufferPositiveOrig)
                             sceCtrlReadBufferPositiveOrig = (void*)stubs[j];
-                            stubs[j] = (u32)sceCtrlReadBufferPositivePatched;
-                            LOG("PATCHED IMPORT Read stub[%d]=0x%08lx orig=0x%08lx", j, (unsigned long)stubs[j], (unsigned long)sceCtrlReadBufferPositiveOrig);
-                        }
+                        stubs[j] = (u32)sceCtrlReadBufferPositivePatched;
+                        LOG("PATCHED IMPORT Read NID 0x%08lx -> 0x%08lx", (unsigned long)nids[j], (unsigned long)stubs[j]);
                     }
-                    if (nids[j] == 0x3A622550) { // Peek
-                        if (!sceCtrlPeekBufferPositiveOrig) {
+                    if (nids[j] == 0x3A622550) { // sceCtrlPeekBufferPositive
+                        if (!sceCtrlPeekBufferPositiveOrig)
                             sceCtrlPeekBufferPositiveOrig = (void*)stubs[j];
-                            stubs[j] = (u32)sceCtrlPeekBufferPositivePatched;
-                            LOG("PATCHED IMPORT Peek stub[%d]=0x%08lx orig=0x%08lx", j, (unsigned long)stubs[j], (unsigned long)sceCtrlPeekBufferPositiveOrig);
-                        }
+                        stubs[j] = (u32)sceCtrlPeekBufferPositivePatched;
+                        LOG("PATCHED IMPORT Peek NID 0x%08lx -> 0x%08lx", (unsigned long)nids[j], (unsigned long)stubs[j]);
                     }
                 }
             }
-            // Pindah ke tabel berikutnya: 5 u32 + slen * ? - di PSP stub struct size = 20 byte = 5 u32
+
+            // Pindah ke tabel berikutnya: 5 u32
             stub += 5;
-            // Kalau slen > 5, lompat sisanya (jarang terjadi)
+            // Kalau slen > 5, lompat sisanya (jarang kepake)
             if (slen > 5) stub += (slen - 5);
         }
     }
+
     if (!sceCtrlReadBufferPositiveOrig) LOG("FAIL IMPORT Read - not found in PDIAPP");
     if (!sceCtrlPeekBufferPositiveOrig) LOG("FAIL IMPORT Peek - not found in PDIAPP");
 }
-
 int set_offsets(char *disc_id, char *disc_version)
 {
     if (strcmp("2.00", disc_version) == 0 && (strcmp("UCES01245", disc_id) == 0 || strcmp("UCUS98632", disc_id) == 0)) {
