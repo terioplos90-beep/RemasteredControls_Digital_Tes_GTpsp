@@ -1,5 +1,5 @@
 /*
-  FULL BUILD - FIX PPSSPP - Menu + Balapan
+  FULL BUILD - FIX PPSSPP IMPORT PATCH - Menu + Balapan
 */
 #include <pspctrl.h>
 #include <pspkernel.h>
@@ -11,6 +11,7 @@
 #include <pspnet.h>
 #include <pspnet_inet.h>
 #include <psputility.h>
+#include <pspmodulemgr.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -118,35 +119,62 @@ static int udp_thread(SceSize args, void *argp)
     return 0;
 }
 
-// ===== FIX PPSSPP: COBA SEMUA NAMA MODUL sceCtrl =====
-static void patch_sceCtrl_ppsspp()
+// ===== PATCH IMPORT PDIAPP - CARA PPSSPP =====
+// Kita cari tabel import PDIAPP, kalau NID-nya ketemu, kita timpa
+// pointer fungsinya ke fungsi patch kita, dan simpan yang ori.
+static void patch_pdiapp_imports()
 {
-    const char *mods[] = {
-        "sceController_Service",
-        "sceCtrl_driver",
-        "sceCtrl",
-        "sceController",
-        NULL
-    };
-    int i;
-    for (i = 0; mods[i] != NULL; i++) {
-        void *f1 = (void*)sctrlHENFindFunction((char*)mods[i], (char*)"sceCtrl", 0x1F803938);
-        void *f2 = (void*)sctrlHENFindFunction((char*)mods[i], (char*)"sceCtrl", 0x3A622550);
-        LOG("try mod %s -> read=0x%08lx peek=0x%08lx", mods[i], (unsigned long)f1, (unsigned long)f2);
-        if (f1 && !sceCtrlReadBufferPositiveOrig) {
-            sceCtrlReadBufferPositiveOrig = f1;
-            sctrlHENPatchSyscall((void*)0x1F803938, (void*)sceCtrlReadBufferPositivePatched);
-            LOG("PATCHED sceCtrlRead via %s - MENU OK", mods[i]);
+    SceModule *mod = (SceModule*)sceKernelFindModuleByName((char*)GAME_MODULE_NAME);
+    if (!mod) { LOG("FAIL find PDIAPP module"); return; }
+    LOG("PDIAPP mod stub_top=0x%08lx stub_end=0x%08lx", (unsigned long)mod->stub_top, (unsigned long)mod->stub_end);
+
+    {
+        u32 *stub = (u32*)mod->stub_top;
+        u32 *end = (u32*)mod->stub_end;
+        for (; stub < end; ) {
+            // Struct SceLibraryStubTable: libname(4), version(2), attr(2), len(2), vstubcount(2), nidtable(4), stubtable(4), entrytable(4) = 20 byte
+            u32 libname_addr = stub[0];
+            u16 len = (u16)((stub[1] >> 16) & 0xFFFF);
+            // stub[1] = version(lo) + attr(hi) - kita ambil len dari stub[1] high? pakai cara aman:
+            // Layout 32-bit: [0]=libname, [1]=version|attr, [2]=len|vstubcount, [3]=nidtable, [4]=stubtable
+            u32 len_v = stub[2];
+            u16 slen = (u16)(len_v & 0xFFFF);
+            u16 stubcount = (u16)((len_v >> 16) & 0xFFFF);
+            u32 nidtable = stub[3];
+            u32 stubtable = stub[4];
+            (void)libname_addr; (void)len;
+
+            LOG("stub lib @0x%08lx count=%d nid=0x%08lx stubtbl=0x%08lx", (unsigned long)stub, stubcount, (unsigned long)nidtable, (unsigned long)stubtable);
+
+            {
+                int j;
+                u32 *nids = (u32*)nidtable;
+                u32 *stubs = (u32*)stubtable;
+                for (j = 0; j < stubcount; j++) {
+                    if (nids[j] == 0x1F803938) { // Read
+                        if (!sceCtrlReadBufferPositiveOrig) {
+                            sceCtrlReadBufferPositiveOrig = (void*)stubs[j];
+                            stubs[j] = (u32)sceCtrlReadBufferPositivePatched;
+                            LOG("PATCHED IMPORT Read stub[%d]=0x%08lx orig=0x%08lx", j, (unsigned long)stubs[j], (unsigned long)sceCtrlReadBufferPositiveOrig);
+                        }
+                    }
+                    if (nids[j] == 0x3A622550) { // Peek
+                        if (!sceCtrlPeekBufferPositiveOrig) {
+                            sceCtrlPeekBufferPositiveOrig = (void*)stubs[j];
+                            stubs[j] = (u32)sceCtrlPeekBufferPositivePatched;
+                            LOG("PATCHED IMPORT Peek stub[%d]=0x%08lx orig=0x%08lx", j, (unsigned long)stubs[j], (unsigned long)sceCtrlPeekBufferPositiveOrig);
+                        }
+                    }
+                }
+            }
+            // Pindah ke tabel berikutnya: 5 u32 + slen * ? - di PSP stub struct size = 20 byte = 5 u32
+            stub += 5;
+            // Kalau slen > 5, lompat sisanya (jarang terjadi)
+            if (slen > 5) stub += (slen - 5);
         }
-        if (f2 && !sceCtrlPeekBufferPositiveOrig) {
-            sceCtrlPeekBufferPositiveOrig = f2;
-            sctrlHENPatchSyscall((void*)0x3A622550, (void*)sceCtrlPeekBufferPositivePatched);
-            LOG("PATCHED sceCtrlPeek via %s - MENU OK", mods[i]);
-        }
-        if (sceCtrlReadBufferPositiveOrig && sceCtrlPeekBufferPositiveOrig) break;
     }
-    if (!sceCtrlReadBufferPositiveOrig) LOG("FAIL find sceCtrlRead - all mods");
-    if (!sceCtrlPeekBufferPositiveOrig) LOG("FAIL find sceCtrlPeek - all mods");
+    if (!sceCtrlReadBufferPositiveOrig) LOG("FAIL IMPORT Read - not found in PDIAPP");
+    if (!sceCtrlPeekBufferPositiveOrig) LOG("FAIL IMPORT Peek - not found in PDIAPP");
 }
 
 int set_offsets(char *disc_id, char *disc_version)
@@ -183,7 +211,8 @@ int init()
     thid = sceKernelCreateThread("udp_thread", udp_thread, 0x18, 0x10000, 0, NULL);
     if (thid >= 0) sceKernelStartThread(thid, 0, NULL);
 
-    patch_sceCtrl_ppsspp();
+    // PPSSPP: patch import PDIAPP, bukan syscall
+    patch_pdiapp_imports();
 
     HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
     LOG("hijacking function at 0x%08lx", offset_populate_car_analog_control);
