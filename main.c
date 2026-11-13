@@ -1,6 +1,5 @@
 /*
-FIX: UDP nyampe tapi game lewat jalur DIGITAL, bukan ANALOG
-Hijack DIGITAL + ANALOG
+FIX FINAL: build PPSSPP + IRSHELL, tanpa atoi, tanpa unused thid
 */
 
 #include <pspctrl.h>
@@ -9,7 +8,6 @@ Hijack DIGITAL + ANALOG
 #include <pspkernel.h>
 #include <netinet/in.h>
 #include <string.h>
-#include <stdlib.h>
 #include "hooking.h"
 #include "disc_ident.h"
 #include "logging.h"
@@ -28,6 +26,20 @@ static u32 game_base_addr = 0;
 static volatile int btn_x = 0;
 static volatile int btn_square = 0;
 static volatile int steer_val = 0;
+
+// --- PENGGANTI atoi ---
+static int parse_int(const char *s)
+{
+    int sign = 1;
+    int v = 0;
+    if (*s == '-') { sign = -1; s++; }
+    else if (*s == '+') { s++; }
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    return v * sign;
+}
 
 static int udp_thread(SceSize args, void *argp)
 {
@@ -56,7 +68,7 @@ static int udp_thread(SceSize args, void *argp)
             else if (strncmp(buf, "X=0", 3) == 0) { btn_x = 0; LOG("BTN X = OFF"); }
             else if (strncmp(buf, "SQUARE=1", 8) == 0) { btn_square = 1; LOG("BTN SQUARE = ON"); }
             else if (strncmp(buf, "SQUARE=0", 8) == 0) { btn_square = 0; LOG("BTN SQUARE = OFF"); }
-            else if (strncmp(buf, "S=", 2) == 0) { steer_val = atoi(&buf[2]); }
+            else if (strncmp(buf, "S=", 2) == 0) { steer_val = parse_int(&buf[2]); }
         }
     }
     return 0;
@@ -97,7 +109,6 @@ void digital_to_analog_patched(u32 *param_1, u32 *param_2)
     if (digital_to_analog_orig) digital_to_analog_orig(param_1, param_2);
 }
 
-// --- JALUR DIGITAL, INI YANG DIPAKE GAME LU ---
 static void (*populate_car_digital_control_orig)(unsigned char *param_1, u32 param_2, u32 param_3);
 void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u32 param_3)
 {
@@ -121,7 +132,6 @@ void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u
     }
 }
 
-// --- JALUR ANALOG, BUAT CADANGAN ---
 static void (*populate_car_analog_control_orig)(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6);
 void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6)
 {
@@ -184,10 +194,11 @@ static void StartPPSSPP(void)
     }
 }
 
-#ifdef IRSHELL
+// IRSHELL: selalu ada, biar ga error pas -DIRSHELL=1 atau engga
 int irshell_find_module(SceSize args, void *argp)
 {
     (void)args; (void)argp;
+    LOG("IRSHELL find module mulai");
     while (1) {
         StartPPSSPP();
         if (game_base_addr != 0) break;
@@ -196,23 +207,24 @@ int irshell_find_module(SceSize args, void *argp)
     sceKernelExitDeleteThread(0);
     return 0;
 }
-#endif
 
 int module_start(SceSize args, void *argp)
 {
-    SceUID thid;
     (void)args; (void)argp;
     LOG("module started");
     is_emulator = sceIoDevctl("kemulator:", EMULATOR_DEVCTL__IS_EMULATOR, NULL, 0, NULL, 0) == 0;
     LOG("is_emulator=%d", is_emulator);
     start_udp();
-    if (is_emulator) StartPPSSPP();
-#ifdef IRSHELL
-    else {
-        thid = sceKernelCreateThread("irshell_find", irshell_find_module, 0x18, 0x10000, 0, NULL);
-        if (thid >= 0) sceKernelStartThread(thid, 0, NULL);
+
+    if (is_emulator) {
+        LOG("starting in ppsspp mode");
+        StartPPSSPP();
+    } else {
+        SceUID thid2;
+        LOG("starting in irshell mode");
+        thid2 = sceKernelCreateThread("irshell_find", irshell_find_module, 0x18, 0x10000, 0, NULL);
+        if (thid2 >= 0) sceKernelStartThread(thid2, 0, NULL);
     }
-#endif
     return 0;
 }
 
