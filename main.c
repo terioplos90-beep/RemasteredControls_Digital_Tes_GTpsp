@@ -1,7 +1,5 @@
 /*
-  FULL BUILD - GTPSP Remastered Controls
-  X / SQUARE / Setir dari HP -> Menu + Balapan
-  Mode: IRSHELL + PPSSPP - FIX BUILD
+  FULL BUILD - FIX PPSSPP - Menu + Balapan
 */
 #include <pspctrl.h>
 #include <pspkernel.h>
@@ -34,12 +32,10 @@ static STMOD_HANDLER previous;
 static int is_emulator;
 static u32 game_base_addr = 0;
 
-// ============ DATA DARI HP (UDP) ============
 static volatile int btn_x = 0;
 static volatile int btn_square = 0;
 static volatile int steer_val = 0;
 
-// ============ PATCH sceCtrl - BUAT MENU ============
 static int (*sceCtrlReadBufferPositiveOrig)(SceCtrlData *pad_data, int count);
 static int (*sceCtrlPeekBufferPositiveOrig)(SceCtrlData *pad_data, int count);
 
@@ -50,10 +46,8 @@ static void apply_patch_to_pad(SceCtrlData *pad_data, int count)
     for (i = 0; i < count; i++) {
         if (btn_x) pad_data[i].Buttons |= PSP_CTRL_CROSS;
         else pad_data[i].Buttons &= ~PSP_CTRL_CROSS;
-
         if (btn_square) pad_data[i].Buttons |= PSP_CTRL_SQUARE;
         else pad_data[i].Buttons &= ~PSP_CTRL_SQUARE;
-
         {
             int s = steer_val;
             if (s > 127) s = 127;
@@ -84,75 +78,77 @@ int sceCtrlPeekBufferPositivePatched(SceCtrlData *pad_data, int count)
     return ret;
 }
 
-// ============ UDP THREAD ============
 static int udp_thread(SceSize args, void *argp)
 {
     int sock;
     struct sockaddr_in addr;
     char buf[128];
-
     LOG("UDP THREAD START");
-
     sock = sceNetInetSocket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        LOG("UDP socket fail");
-        sceKernelExitDeleteThread(0);
-        return 0;
-    }
-
+    if (sock < 0) { sceKernelExitDeleteThread(0); return 0; }
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = 0xB515; // 5557 dalam network order, biar ga perlu htons
-    addr.sin_addr.s_addr = 0; // INADDR_ANY
-
-    if (sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        LOG("UDP bind fail");
-        sceKernelExitDeleteThread(0);
-        return 0;
-    }
-
+    addr.sin_port = 0xB515;
+    addr.sin_addr.s_addr = 0;
+    if (sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { sceKernelExitDeleteThread(0); return 0; }
     LOG("N 5557");
-
     while (1) {
         int len = sceNetInetRecv(sock, buf, sizeof(buf) - 1, 0);
         if (len <= 0) continue;
         buf[len] = 0;
-
         if (buf[0] == 'S' && buf[1] == '=') {
-            int v = 0;
-            int neg = 0;
-            int i = 2;
+            int v = 0; int neg = 0; int i = 2;
             if (buf[i] == '-') { neg = 1; i++; }
-            while (buf[i] >= '0' && buf[i] <= '9') {
-                v = v * 10 + (buf[i] - '0');
-                i++;
-            }
+            while (buf[i] >= '0' && buf[i] <= '9') { v = v * 10 + (buf[i] - '0'); i++; }
             if (neg) v = -v;
             steer_val = v;
-            LOG("UDP RX: S=%d", v);
         }
         else if (buf[0] == 'X' && buf[1] == '=') {
             btn_x = (buf[2] == '1') ? 1 : 0;
-            LOG("UDP RX: X=%d", btn_x);
             LOG("BTN X = %s", btn_x ? "ON" : "OFF");
         }
         else if (buf[0] == 'S' && buf[1] == 'Q') {
-            int v = 0;
-            int i = 0;
+            int v = 0; int i = 0;
             while (buf[i] && buf[i] != '=') i++;
-            if (buf[i] == '=') {
-                i++;
-                v = (buf[i] == '1') ? 1 : 0;
-            }
+            if (buf[i] == '=') { i++; v = (buf[i] == '1') ? 1 : 0; }
             btn_square = v;
-            LOG("UDP RX: SQUARE=%d", v);
             LOG("BTN SQUARE = %s", btn_square ? "ON" : "OFF");
         }
     }
     return 0;
 }
 
-// ============ HIJACK BALAPAN ============
+// ===== FIX PPSSPP: COBA SEMUA NAMA MODUL sceCtrl =====
+static void patch_sceCtrl_ppsspp()
+{
+    const char *mods[] = {
+        "sceController_Service",
+        "sceCtrl_driver",
+        "sceCtrl",
+        "sceController",
+        NULL
+    };
+    int i;
+    for (i = 0; mods[i] != NULL; i++) {
+        void *f1 = sctrlHENFindFunction(mods[i], "sceCtrl", 0x1F803938);
+        void *f2 = sctrlHENFindFunction(mods[i], "sceCtrl", 0x3A622550);
+        LOG("try mod %s -> read=0x%08lx peek=0x%08lx", mods[i], (unsigned long)f1, (unsigned long)f2);
+        if (f1 && !sceCtrlReadBufferPositiveOrig) {
+            sceCtrlReadBufferPositiveOrig = f1;
+            sctrlHENPatchSyscall((void*)0x1F803938, (void*)sceCtrlReadBufferPositivePatched);
+            LOG("PATCHED sceCtrlRead via %s - MENU OK", mods[i]);
+        }
+        if (f2 && !sceCtrlPeekBufferPositiveOrig) {
+            sceCtrlPeekBufferPositiveOrig = f2;
+            sctrlHENPatchSyscall((void*)0x3A622550, (void*)sceCtrlPeekBufferPositivePatched);
+            LOG("PATCHED sceCtrlPeek via %s - MENU OK", mods[i]);
+        }
+        if (sceCtrlReadBufferPositiveOrig && sceCtrlPeekBufferPositiveOrig) break;
+    }
+    if (!sceCtrlReadBufferPositiveOrig) LOG("FAIL find sceCtrlRead - all mods");
+    if (!sceCtrlPeekBufferPositiveOrig) LOG("FAIL find sceCtrlPeek - all mods");
+}
+
 int set_offsets(char *disc_id, char *disc_version)
 {
     if (strcmp("2.00", disc_version) == 0 && (strcmp("UCES01245", disc_id) == 0 || strcmp("UCUS98632", disc_id) == 0)) {
@@ -169,62 +165,28 @@ void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned cha
 {
     populate_car_analog_control_orig(param_1, param_2, param_3, param_4, param_5, param_6);
 }
-// Dummy biar exports.exp lama tetap ke-link, ga kepake buat menu
-void digital_to_analog_patched(u32 *param_1, u32 *param_2)
-{
-    (void)param_1;
-    (void)param_2;
-}
 
-void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u32 param_3)
-{
-    (void)param_1;
-    (void)param_2;
-    (void)param_3;
-}
+void digital_to_analog_patched(u32 *param_1, u32 *param_2) { (void)param_1; (void)param_2; }
+void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u32 param_3) { (void)param_1; (void)param_2; (void)param_3; }
+
 // ============ INIT ============
 int init()
 {
     char disc_id[50];
     char disc_version[50];
     SceUID thid;
-
-    if (get_disc_id_version(disc_id, disc_version) != 0) {
-        LOG("disc id fail");
-        return -1;
-    }
+    if (get_disc_id_version(disc_id, disc_version) != 0) { LOG("disc id fail"); return -1; }
     LOG("disc id is %s", disc_id);
     LOG("disc version is %s", disc_version);
-
-    if (set_offsets(disc_id, disc_version) != 0) {
-        LOG("set_offsets fail");
-        return -1;
-    }
+    if (set_offsets(disc_id, disc_version) != 0) { LOG("set_offsets fail"); return -1; }
 
     thid = sceKernelCreateThread("udp_thread", udp_thread, 0x18, 0x10000, 0, NULL);
     if (thid >= 0) sceKernelStartThread(thid, 0, NULL);
 
-    // PATCH MENU: sceCtrl - FIX CAST void*
-    sceCtrlReadBufferPositiveOrig = (void*)sctrlHENFindFunction("sceController_Service", "sceCtrl", 0x1F803938);
-    sceCtrlPeekBufferPositiveOrig = (void*)sctrlHENFindFunction("sceController_Service", "sceCtrl", 0x3A622550);
-
-    if (sceCtrlReadBufferPositiveOrig) {
-        sctrlHENPatchSyscall((void*)0x1F803938, (void*)sceCtrlReadBufferPositivePatched);
-        LOG("PATCHED sceCtrlRead - MENU OK");
-    } else {
-        LOG("FAIL find sceCtrlRead");
-    }
-
-    if (sceCtrlPeekBufferPositiveOrig) {
-        sctrlHENPatchSyscall((void*)0x3A622550, (void*)sceCtrlPeekBufferPositivePatched);
-        LOG("PATCHED sceCtrlPeek - MENU OK");
-    } else {
-        LOG("FAIL find sceCtrlPeek");
-    }
+    patch_sceCtrl_ppsspp();
 
     HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
     LOG("hijacking function at 0x%08lx", offset_populate_car_analog_control);
-
     LOG("INIT OK - X + SQUARE SIAP - MENU + BALAPAN");
     return 0;
 }
@@ -257,15 +219,9 @@ int irshell_find_module(SceSize args, void *argp)
                 if (sceKernelQueryModuleInfo(modules[i], &info) < 0) continue;
                 char namebuf[sizeof(info.name) + 1] = {0};
                 memcpy(namebuf, info.name, sizeof(info.name));
-                if (strcmp(namebuf, GAME_MODULE_NAME) == 0) {
-                    game_base_addr = info.text_addr + 0x28;
-                }
+                if (strcmp(namebuf, GAME_MODULE_NAME) == 0) game_base_addr = info.text_addr + 0x28;
             }
-            if (game_base_addr != 0) {
-                init();
-                sceKernelExitDeleteThread(0);
-                return 0;
-            }
+            if (game_base_addr != 0) { init(); sceKernelExitDeleteThread(0); return 0; }
         }
         sceKernelDelayThread(1000 * 1000);
         cycles++;
@@ -286,13 +242,9 @@ static void StartPPSSPP()
             if (sceKernelQueryModuleInfo(modules[i], &info) < 0) continue;
             char namebuf[sizeof(info.name) + 1] = {0};
             memcpy(namebuf, info.name, sizeof(info.name));
-            if (strcmp(namebuf, GAME_MODULE_NAME) == 0) {
-                game_base_addr = info.text_addr;
-            }
+            if (strcmp(namebuf, GAME_MODULE_NAME) == 0) game_base_addr = info.text_addr;
         }
-        if (game_base_addr != 0) {
-            init();
-        }
+        if (game_base_addr != 0) init();
     }
 }
 
@@ -321,7 +273,4 @@ int module_start(SceSize args, void *argp)
     return 0;
 }
 
-int module_stop(SceSize args, void *argp)
-{
-    return 0;
-}
+int module_stop(SceSize args, void *argp) { return 0; }
