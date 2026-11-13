@@ -1,5 +1,8 @@
 /*
-FIX FINAL: build PPSSPP + IRSHELL, tanpa atoi, tanpa unused thid
+FIX BENERAN: X asli PSP, bukan X gas-gas an
+UDP X -> PSP_CTRL_CROSS
+UDP SQUARE -> PSP_CTRL_SQUARE
+UDP S= -> Analog stick kiri-kanan
 */
 
 #include <pspctrl.h>
@@ -27,7 +30,6 @@ static volatile int btn_x = 0;
 static volatile int btn_square = 0;
 static volatile int steer_val = 0;
 
-// --- PENGGANTI atoi ---
 static int parse_int(const char *s)
 {
     int sign = 1;
@@ -97,66 +99,74 @@ int set_offsets(char *disc_id, char *disc_version)
     return -1;
 }
 
+// ============ INI INTINYA: TOMBOL X ASLI ============
 static int (*sceCtrlReadBufferPositiveOrig)(SceCtrlData *pad_data, int count);
 int sceCtrlReadBufferPositivePatched(SceCtrlData *pad_data, int count)
 {
-    return sceCtrlReadBufferPositiveOrig(pad_data, count);
+    int ret;
+    int i;
+    ret = sceCtrlReadBufferPositiveOrig(pad_data, count);
+    if (ret <= 0) return ret;
+
+    for (i = 0; i < ret; i++) {
+        // Jangan hapus tombol fisik, cuma tambahin tombol UDP
+        if (btn_x) pad_data[i].Buttons |= PSP_CTRL_CROSS;
+        else pad_data[i].Buttons &= ~PSP_CTRL_CROSS;
+
+        if (btn_square) pad_data[i].Buttons |= PSP_CTRL_SQUARE;
+        else pad_data[i].Buttons &= ~PSP_CTRL_SQUARE;
+
+        // S= jadi analog stick, 128 tengah
+        {
+            int s = steer_val;
+            if (s > 127) s = 127;
+            if (s < -127) s = -127;
+            pad_data[i].Lx = (unsigned char)(128 + s);
+            pad_data[i].Ly = 128;
+        }
+    }
+    return ret;
 }
 
+static int (*sceCtrlPeekBufferPositiveOrig)(SceCtrlData *pad_data, int count);
+int sceCtrlPeekBufferPositivePatched(SceCtrlData *pad_data, int count)
+{
+    int ret;
+    int i;
+    ret = sceCtrlPeekBufferPositiveOrig(pad_data, count);
+    if (ret <= 0) return ret;
+    for (i = 0; i < ret; i++) {
+        if (btn_x) pad_data[i].Buttons |= PSP_CTRL_CROSS;
+        else pad_data[i].Buttons &= ~PSP_CTRL_CROSS;
+        if (btn_square) pad_data[i].Buttons |= PSP_CTRL_SQUARE;
+        else pad_data[i].Buttons &= ~PSP_CTRL_SQUARE;
+        {
+            int s = steer_val;
+            if (s > 127) s = 127;
+            if (s < -127) s = -127;
+            pad_data[i].Lx = (unsigned char)(128 + s);
+            pad_data[i].Ly = 128;
+        }
+    }
+    return ret;
+}
+
+// Mobilnya ga usah di-hijack lagi, biar game yang baca tombol X asli
 static void (*digital_to_analog_orig)(u32 *param_1, u32 *param_2);
 void digital_to_analog_patched(u32 *param_1, u32 *param_2)
 {
     if (digital_to_analog_orig) digital_to_analog_orig(param_1, param_2);
 }
-
 static void (*populate_car_digital_control_orig)(unsigned char *param_1, u32 param_2, u32 param_3);
 void populate_car_digital_control_patched(unsigned char *param_1, u32 param_2, u32 param_3)
 {
-    if (populate_car_digital_control_orig) {
-        populate_car_digital_control_orig(param_1, param_2, param_3);
-    }
-    if (btn_x) {
-        param_1[0] |= 2;
-        *(short *)(&param_1[0x8]) = 4096;
-    }
-    if (btn_square) {
-        param_1[0] |= 4;
-        *(short *)(&param_1[0xA]) = 4096;
-    }
-    {
-        int s = steer_val;
-        if (s > 127) s = 127;
-        if (s < -127) s = -127;
-        *(short *)(&param_1[0xC]) = (short)(s * 32);
-        if (s != 0) param_1[0] |= 1;
-    }
+    if (populate_car_digital_control_orig) populate_car_digital_control_orig(param_1, param_2, param_3);
 }
-
 static void (*populate_car_analog_control_orig)(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6);
 void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6)
 {
-    short *throttle;
-    short *brake;
-    short *steer;
-    int k1;
-    (void)param_1; (void)param_2; (void)param_4; (void)param_5; (void)param_6;
+    (void)param_1; (void)param_2; (void)param_3; (void)param_4; (void)param_5; (void)param_6;
     (void)populate_car_analog_control_orig;
-    throttle = (short *)(&param_3[0x8]);
-    brake = (short *)(&param_3[0xA]);
-    steer = (short *)(&param_3[0xC]);
-    param_3[0] = 0;
-    param_3[1] = 0;
-    k1 = pspSdkSetK1(0);
-    if (btn_x) { param_3[0] |= 2; *throttle = 4096; }
-    if (btn_square) { param_3[0] |= 4; *brake = 4096; }
-    {
-        int s = steer_val;
-        if (s > 127) s = 127;
-        if (s < -127) s = -127;
-        *steer = (short)(s * 32);
-        if (s != 0) param_3[0] |= 1;
-    }
-    pspSdkSetK1(k1);
 }
 
 int init(void)
@@ -167,9 +177,7 @@ int init(void)
     LOG("disc id is %s", disc_id);
     LOG("disc version is %s", disc_version);
     if (set_offsets(disc_id, disc_version) != 0) return -1;
-    HIJACK_FUNCTION(offset_populate_car_digital_control, populate_car_digital_control_patched, populate_car_digital_control_orig);
-    HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
-    LOG("INIT OK - DIGITAL + ANALOG HIJACK");
+    LOG("INIT OK - X ASLI MODE");
     return 0;
 }
 
@@ -194,11 +202,9 @@ static void StartPPSSPP(void)
     }
 }
 
-// IRSHELL: selalu ada, biar ga error pas -DIRSHELL=1 atau engga
 int irshell_find_module(SceSize args, void *argp)
 {
     (void)args; (void)argp;
-    LOG("IRSHELL find module mulai");
     while (1) {
         StartPPSSPP();
         if (game_base_addr != 0) break;
@@ -213,15 +219,11 @@ int module_start(SceSize args, void *argp)
     (void)args; (void)argp;
     LOG("module started");
     is_emulator = sceIoDevctl("kemulator:", EMULATOR_DEVCTL__IS_EMULATOR, NULL, 0, NULL, 0) == 0;
-    LOG("is_emulator=%d", is_emulator);
     start_udp();
-
     if (is_emulator) {
-        LOG("starting in ppsspp mode");
         StartPPSSPP();
     } else {
         SceUID thid2;
-        LOG("starting in irshell mode");
         thid2 = sceKernelCreateThread("irshell_find", irshell_find_module, 0x18, 0x10000, 0, NULL);
         if (thid2 >= 0) sceKernelStartThread(thid2, 0, NULL);
     }
