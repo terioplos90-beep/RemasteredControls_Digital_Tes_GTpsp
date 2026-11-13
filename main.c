@@ -130,8 +130,8 @@ static void patch_sceCtrl_ppsspp()
     };
     int i;
     for (i = 0; mods[i] != NULL; i++) {
-        void *f1 = sctrlHENFindFunction(mods[i], "sceCtrl", 0x1F803938);
-        void *f2 = sctrlHENFindFunction(mods[i], "sceCtrl", 0x3A622550);
+        void *f1 = (void*)sctrlHENFindFunction((char*)mods[i], (char*)"sceCtrl", 0x1F803938);
+        void *f2 = (void*)sctrlHENFindFunction((char*)mods[i], (char*)"sceCtrl", 0x3A622550);
         LOG("try mod %s -> read=0x%08lx peek=0x%08lx", mods[i], (unsigned long)f1, (unsigned long)f2);
         if (f1 && !sceCtrlReadBufferPositiveOrig) {
             sceCtrlReadBufferPositiveOrig = f1;
