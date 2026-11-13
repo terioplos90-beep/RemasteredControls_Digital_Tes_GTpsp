@@ -1,7 +1,7 @@
 /*
   FULL BUILD - GTPSP Remastered Controls
   X / SQUARE / Setir dari HP -> Menu + Balapan
-  Mode: IRSHELL + PPSSPP
+  Mode: IRSHELL + PPSSPP - FIX BUILD
 */
 #include <pspctrl.h>
 #include <pspkernel.h>
@@ -13,6 +13,9 @@
 #include <pspnet.h>
 #include <pspnet_inet.h>
 #include <psputility.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <systemctrl.h>
 #include "hooking.h"
 #include "disc_ident.h"
@@ -34,7 +37,7 @@ static u32 game_base_addr = 0;
 // ============ DATA DARI HP (UDP) ============
 static volatile int btn_x = 0;
 static volatile int btn_square = 0;
-static volatile int steer_val = 0; // -127 sampai 127
+static volatile int steer_val = 0;
 
 // ============ PATCH sceCtrl - BUAT MENU ============
 static int (*sceCtrlReadBufferPositiveOrig)(SceCtrlData *pad_data, int count);
@@ -85,7 +88,7 @@ int sceCtrlPeekBufferPositivePatched(SceCtrlData *pad_data, int count)
 static int udp_thread(SceSize args, void *argp)
 {
     int sock;
-    struct SceNetSockaddrIn addr;
+    struct sockaddr_in addr;
     char buf[128];
 
     LOG("UDP THREAD START");
@@ -99,8 +102,8 @@ static int udp_thread(SceSize args, void *argp)
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = sceNetHtons(5557);
-    addr.sin_addr.s_addr = sceNetHtonl(INADDR_ANY);
+    addr.sin_port = 0xB515; // 5557 dalam network order, biar ga perlu htons
+    addr.sin_addr.s_addr = 0; // INADDR_ANY
 
     if (sceNetInetBind(sock, (struct SceNetSockaddr *)&addr, sizeof(addr)) < 0) {
         LOG("UDP bind fail");
@@ -115,7 +118,6 @@ static int udp_thread(SceSize args, void *argp)
         if (len <= 0) continue;
         buf[len] = 0;
 
-        // Format dari HP: S=xx , X=1 / X=0 , SQUARE=1 / SQUARE=0
         if (buf[0] == 'S' && buf[1] == '=') {
             int v = 0;
             int neg = 0;
@@ -135,7 +137,6 @@ static int udp_thread(SceSize args, void *argp)
             LOG("BTN X = %s", btn_x ? "ON" : "OFF");
         }
         else if (buf[0] == 'S' && buf[1] == 'Q') {
-            // SQUARE=1
             int v = 0;
             int i = 0;
             while (buf[i] && buf[i] != '=') i++;
@@ -151,7 +152,7 @@ static int udp_thread(SceSize args, void *argp)
     return 0;
 }
 
-// ============ HIJACK BALAPAN (BIAR TETAP FUNGSI DI BALAPAN) ============
+// ============ HIJACK BALAPAN ============
 int set_offsets(char *disc_id, char *disc_version)
 {
     if (strcmp("2.00", disc_version) == 0 && (strcmp("UCES01245", disc_id) == 0 || strcmp("UCUS98632", disc_id) == 0)) {
@@ -166,8 +167,6 @@ int set_offsets(char *disc_id, char *disc_version)
 static void (*populate_car_analog_control_orig)(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6);
 void populate_car_analog_control_patched(u32 param_1, int *param_2, unsigned char *param_3, u32 param_4, u32 param_5, unsigned char param_6)
 {
-    // Di balapan, kita biarin ori jalan, karena menu sudah di-handle sceCtrl patch.
-    // Tapi tetap panggil ori supaya game tidak crash.
     populate_car_analog_control_orig(param_1, param_2, param_3, param_4, param_5, param_6);
 }
 
@@ -190,32 +189,29 @@ int init()
         return -1;
     }
 
-    // --- START UDP ---
     thid = sceKernelCreateThread("udp_thread", udp_thread, 0x18, 0x10000, 0, NULL);
     if (thid >= 0) sceKernelStartThread(thid, 0, NULL);
 
-    // --- PATCH MENU + BALAPAN: sceCtrl ---
-    // Ini kuncinya buat MENU. Tanpa ini, X cuma fungsi di balapan.
+    // PATCH MENU: sceCtrl - FIX CAST void*
     sceCtrlReadBufferPositiveOrig = (void*)sctrlHENFindFunction("sceController_Service", "sceCtrl", 0x1F803938);
     sceCtrlPeekBufferPositiveOrig = (void*)sctrlHENFindFunction("sceController_Service", "sceCtrl", 0x3A622550);
 
     if (sceCtrlReadBufferPositiveOrig) {
-        sctrlHENPatchSyscall(0x1F803938, sceCtrlReadBufferPositivePatched);
+        sctrlHENPatchSyscall((void*)0x1F803938, (void*)sceCtrlReadBufferPositivePatched);
         LOG("PATCHED sceCtrlRead - MENU OK");
     } else {
         LOG("FAIL find sceCtrlRead");
     }
 
     if (sceCtrlPeekBufferPositiveOrig) {
-        sctrlHENPatchSyscall(0x3A622550, sceCtrlPeekBufferPositivePatched);
+        sctrlHENPatchSyscall((void*)0x3A622550, (void*)sceCtrlPeekBufferPositivePatched);
         LOG("PATCHED sceCtrlPeek - MENU OK");
     } else {
         LOG("FAIL find sceCtrlPeek");
     }
 
-    // --- HIJACK BALAPAN (tetap dipasang biar balapan stabil) ---
     HIJACK_FUNCTION(offset_populate_car_analog_control, populate_car_analog_control_patched, populate_car_analog_control_orig);
-    LOG("hijacking function at 0x%08x", offset_populate_car_analog_control);
+    LOG("hijacking function at 0x%08lx", offset_populate_car_analog_control);
 
     LOG("INIT OK - X + SQUARE SIAP - MENU + BALAPAN");
     return 0;
