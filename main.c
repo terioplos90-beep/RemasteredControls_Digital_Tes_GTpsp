@@ -126,11 +126,11 @@ static void patch_pdiapp_imports()
 {
     SceModule *mod = (SceModule*)sceKernelFindModuleByName((char*)GAME_MODULE_NAME);
     if (!mod) { LOG("FAIL find PDIAPP module"); return; }
-    LOG("PDIAPP mod stub_top=0x%08lx stub_end=0x%08lx", (unsigned long)mod->stub_top, (unsigned long)mod->stub_end);
+    LOG("PDIAPP mod stub_top=0x%08lx stub_size=0x%08lx", (unsigned long)mod->stub_top, (unsigned long)mod->stub_size);
 
     {
         u32 *stub = (u32*)mod->stub_top;
-        u32 *end = (u32*)mod->stub_end;
+        u32 *end = (u32*)(mod->stub_top + mod->stub_size);
         for (; stub < end; ) {
             // Struct SceLibraryStubTable: libname(4), version(2), attr(2), len(2), vstubcount(2), nidtable(4), stubtable(4), entrytable(4) = 20 byte
             u32 libname_addr = stub[0];
