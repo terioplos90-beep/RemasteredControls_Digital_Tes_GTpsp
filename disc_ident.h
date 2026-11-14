@@ -1,1 +1,5 @@
-int get_disc_id_version(char *id_out, char *version_out);
+#ifndef _DISC_IDENT_
+#define _DISC_IDENT_
+#include <psptypes.h>
+u32 get_disc_id_hash(void);
+#endif
