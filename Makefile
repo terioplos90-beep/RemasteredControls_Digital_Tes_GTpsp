@@ -1,19 +1,15 @@
 TARGET = GTRemastered
-OBJS = main.o hooking.o disc_ident.o exports.o
+OBJS = main.o hooking.o disc_ident.o udp_receiver.o
 
-CFLAGS = $(CFLAGS_EXTRA) -O2 -Os -G0 -Wall -fshort-wchar -fno-pic -mno-check-zero-division -fno-builtin -DDEBUG_LOG=1
+# Ini penting, biar sceNetInet* ke-link
+LIBS = -lpspnet_inet -lpspnet -lpspctrl -lpspkernel -lpspsystemctrl_user
+
+CFLAGS = -O2 -G0 -Wall -fno-pic
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
 
 BUILD_PRX = 1
-PRX_EXPORTS = exports.exp
-
-# use kernel "libc"
-USE_KERNEL_LIBS = 1
-
-LIBS = -lpspsystemctrl_kernel -lpspnet_inet -lpspnet -lpspdebug -lpspdisplay_driver -lpspctrl_driver -lpspmodinfo -lpspsdk -lpspkernel -lpspgu -lpspgum -lpspge
-
-PSP_FW_VERSION=661
+PSP_FW_VERSION = 500
 
 PSPSDK = $(shell psp-config --pspsdk-path)
-include $(PSPSDK)/lib/build_prx.mak
+include $(PSPSDK)/lib/build.mak
