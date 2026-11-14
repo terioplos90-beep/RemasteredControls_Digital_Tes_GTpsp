@@ -37,17 +37,25 @@ void patch_pdiapp_imports(void) {
 
 // ===== 2. Fungsi UDP yang tadi error =====
 static int udp_thread(SceSize args, void *argp) {
+struct MyAddr {
+    unsigned short sin_family;
+    unsigned short sin_port;
+    unsigned int sin_addr;
+    char sin_zero[8];
+};
+
+static int udp_thread(SceSize args, void *argp) {
     int sock = sceNetInetSocket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         sceKernelExitDeleteThread(0);
         return -1;
     }
 
-    struct sockaddr_in addr;
+    struct MyAddr addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = sceNetInetHtons(5557);
-    addr.sin_addr.s_addr = sceNetInetInetAddr("0.0.0.0");
+    addr.sin_port = 0xB515;
+    addr.sin_addr = 0;
 
     if (sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         sceKernelExitDeleteThread(0);
@@ -56,10 +64,10 @@ static int udp_thread(SceSize args, void *argp) {
 
     char buf[64];
     while (1) {
-        struct sockaddr_in from;
-        socklen_t fromlen = sizeof(from);
+        struct MyAddr from;
+        unsigned long fromlen = sizeof(from);
         int len = sceNetInetRecvfrom(sock, buf, sizeof(buf)-1, 0,
-            (struct sockaddr *)&from, &fromlen);
+            (struct sockaddr *)&from, (socklen_t *)&fromlen);
         if (len <= 0) continue;
         buf[len] = '\0';
 
