@@ -43,23 +43,23 @@ static int udp_thread(SceSize args, void *argp) {
         return -1;
     }
 
-    struct SceNetInetSockaddrIn addr;
+    struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = sceNetHtons(5557);
-    addr.sin_addr = sceNetInetAddr("0.0.0.0");
+    addr.sin_port = sceNetInetHtons(5557);
+    addr.sin_addr.s_addr = sceNetInetInetAddr("0.0.0.0");
 
-    if (sceNetInetBind(sock, (struct SceNetInetSockaddr *)&addr, sizeof(addr)) < 0) {
+    if (sceNetInetBind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         sceKernelExitDeleteThread(0);
         return -1;
     }
 
     char buf[64];
     while (1) {
-        struct SceNetInetSockaddrIn from;
-        SceNetInetSocklen_t fromlen = sizeof(from);
+        struct sockaddr_in from;
+        socklen_t fromlen = sizeof(from);
         int len = sceNetInetRecvfrom(sock, buf, sizeof(buf)-1, 0,
-            (struct SceNetInetSockaddr *)&from, &fromlen);
+            (struct sockaddr *)&from, &fromlen);
         if (len <= 0) continue;
         buf[len] = '\0';
 
