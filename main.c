@@ -36,7 +36,6 @@ void patch_pdiapp_imports(void) {
 }
 
 // ===== 2. Fungsi UDP yang tadi error =====
-static int udp_thread(SceSize args, void *argp) {
 struct MyAddr {
     unsigned short sin_family;
     unsigned short sin_port;
