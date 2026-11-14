@@ -1,6 +1,6 @@
 #include "disc_ident.h"
 #include <string.h>
-
+#include <pspkernel.h>
 // UCES01245 - Eropa v2 ONLY
 u32 offset_digital_to_analog = 0x00000000;
 u32 offset_populate_car_digital_control = 0x00000000;
